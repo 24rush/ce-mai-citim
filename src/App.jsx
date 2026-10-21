@@ -388,7 +388,11 @@ function App() {
             <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
               Ce mai citește <span className="text-violet-300">{username}</span>
             </h1>
-          ) : null}
+          ) : (
+            <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
+              Ce mai citim
+            </h1>
+          )}
         </div>
 
         {username ? (
