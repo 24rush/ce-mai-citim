@@ -27,7 +27,7 @@ export const buildGoodreadsApiUrl = (value, shelf = 'read') => {
   }
 
   const params = new URLSearchParams({ shelf })
-  return `/api/goodreads/${userId}?${params.toString()}`
+  return `https://proxy.cors.dev/https://www.goodreads.com/review/list_rss/${userId}?${params.toString()}`
 }
 
 export const buildGoodreadsRssUrl = (value, shelf = 'read') => {
@@ -38,7 +38,7 @@ export const buildGoodreadsRssUrl = (value, shelf = 'read') => {
   }
 
   const params = new URLSearchParams({ shelf })
-  return `https://www.goodreads.com/review/list_rss/${userId}?${params.toString()}`
+  return `https://proxy.cors.dev/https://www.goodreads.com/review/list_rss/${userId}?${params.toString()}`
 }
 
 export const extractBookUrlFromDescription = (descriptionHtml = '') => {

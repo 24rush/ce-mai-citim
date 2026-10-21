@@ -23,16 +23,16 @@ test('extracts user id from a /{user_id} pathname', () => {
 test('builds RSS URL from a pathname ending in a user id', () => {
   assert.equal(
     buildGoodreadsRssUrl('/18354013'),
-    'https://www.goodreads.com/review/list_rss/18354013?shelf=read',
+    'https://proxy.cors.dev/https://www.goodreads.com/review/list_rss/18354013?shelf=read',
   )
 })
 
-test('builds a same-origin Goodreads API URL for the browser', () => {
-  assert.equal(buildGoodreadsApiUrl('/18354013'), '/api/goodreads/18354013?shelf=read')
+test('builds a proxied Goodreads API URL for the browser', () => {
+  assert.equal(buildGoodreadsApiUrl('/18354013'), 'https://proxy.cors.dev/https://www.goodreads.com/review/list_rss/18354013?shelf=read')
 })
 
-test('builds a shelf-specific Goodreads API URL for the browser', () => {
-  assert.equal(buildGoodreadsApiUrl('/18354013', 'to-read'), '/api/goodreads/18354013?shelf=to-read')
+test('builds a shelf-specific proxied Goodreads API URL for the browser', () => {
+  assert.equal(buildGoodreadsApiUrl('/18354013', 'to-read'), 'https://proxy.cors.dev/https://www.goodreads.com/review/list_rss/18354013?shelf=to-read')
 })
 
 test('returns an empty RSS URL when no user id can be found', () => {
