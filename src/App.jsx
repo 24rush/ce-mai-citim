@@ -9,8 +9,6 @@ import {
 } from './lib/goodreads'
 import './App.css'
 
-const GOODREADS_RSS_URL = buildGoodreadsApiUrl(window.location.pathname, 'read')
-
 const SHELF_OPTIONS = [
   { id: 'read', label: 'Citite', query: 'read' },
   { id: 'to-read', label: 'De citit', query: 'to-read' },
@@ -156,6 +154,16 @@ function App() {
   useEffect(() => {
     const loadBooks = async () => {
       const resolvedUserId = currentUserId || extractGoodreadsUserId(window.location.pathname) || ''
+      const isRootPath = window.location.pathname === '/' || window.location.pathname === ''
+
+      if (!resolvedUserId && isRootPath) {
+        const fallbackUserId = '18354013'
+        window.history.replaceState({}, '', `/${fallbackUserId}`)
+        setCurrentUserId(fallbackUserId)
+        setError('')
+        setIsLoading(false)
+        return
+      }
 
       if (!resolvedUserId) {
         setError('Ups! Nu am găsit nimic la această adresă.')
