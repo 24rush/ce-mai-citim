@@ -262,6 +262,17 @@ function App() {
     })
   }, [activeBookSort, activeSort, filteredBooks])
 
+  useEffect(() => {
+    if (!carouselRef.current) {
+      return
+    }
+
+    carouselRef.current.scrollTo({
+      left: 0,
+      behavior: 'auto',
+    })
+  }, [activeShelf, visibleBooks.length])
+
   const renderStars = (rating) => {
     const filledStars = Math.round(rating || 0)
 
@@ -577,16 +588,7 @@ function App() {
 
                 <div className="book-meta">
                   <h2>
-                    <a
-                      href={book.link}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="book-title-link"
-                      onPointerDown={(event) => event.stopPropagation()}
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      {book.title}
-                    </a>
+                    {book.title}
                   </h2>
                   <p>{book.author}</p>
                   {activeShelf === 'read' ? (
