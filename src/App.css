@@ -710,8 +710,9 @@
 
 @media (max-width: 767px) {
   .app-shell {
-    width: min(100% - 20px, 1200px);
-    padding-top: 24px;
+    width: 100%;
+    max-width: none;
+    padding: 24px 0 48px;
   }
 
   .library-header-row {
@@ -753,11 +754,26 @@
   }
 
   .carousel-panel {
-    gap: 12px;
+    width: 100vw;
+    margin-left: calc(50% - 50vw);
+    gap: 0;
+  }
+
+  .books-carousel {
+    width: 100%;
+    min-width: 100%;
+    padding-left: 12px;
+    padding-right: 12px;
+    padding-top: 40px;
+    padding-bottom: 12px;
   }
 
   .book-card {
     min-width: 190px;
+  }
+
+  .nav-button {
+    display: none;
   }
 
   .book-detail-content {

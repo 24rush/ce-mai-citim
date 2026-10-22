@@ -514,13 +514,15 @@ function App() {
       scrollLeft: carouselRef.current.scrollLeft,
     }
 
-    carouselRef.current.setPointerCapture(event.pointerId)
+    event.currentTarget.setPointerCapture(event.pointerId)
   }
 
   const handlePointerMove = (event) => {
     if (!dragState.current.active || !carouselRef.current) {
       return
     }
+
+    event.preventDefault()
 
     const delta = event.clientX - dragState.current.startX
     carouselRef.current.scrollLeft = dragState.current.scrollLeft - delta
@@ -531,7 +533,10 @@ function App() {
       return
     }
 
-    carouselRef.current.releasePointerCapture(event.pointerId)
+    if (event && typeof event.pointerId === 'number' && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+
     dragState.current.active = false
   }
 
@@ -809,7 +814,14 @@ function App() {
         </div>
       ) : null}
 
-      <section className="carousel-panel" aria-label="Book carousel">
+      <section
+        className="carousel-panel"
+        aria-label="Book carousel"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+      >
         {username ? (
           <button
             type="button"
@@ -838,14 +850,7 @@ function App() {
             </div>
           </div>
         ) : (
-          <div
-            className="books-carousel"
-            ref={carouselRef}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerLeave={handlePointerUp}
-          >
+          <div className="books-carousel" ref={carouselRef}>
             {visibleBooks.map((book) => (
               <article key={book.id} className="book-card">
                 <div className="book-cover-surface" aria-hidden="true">
