@@ -103,6 +103,7 @@ export const parseRssBooks = (xmlText) => {
           link,
           rating: Number.isFinite(rating) ? Math.min(Math.max(rating, 0), 5) : 0,
           thickness,
+          pages: Number.isFinite(pages) && pages > 0 ? pages : 0,
           readAt,
           averageRating: Number.isFinite(averageRating) ? averageRating : 0,
           publishedYear: Number.isFinite(publishedYear) ? publishedYear : 0,
@@ -134,6 +135,7 @@ function App() {
   const [profileUrlInput, setProfileUrlInput] = useState('')
   const [generatedProfileUrl, setGeneratedProfileUrl] = useState('')
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('')
+  const [selectedBook, setSelectedBook] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const availableBookSortOptions = getBookSortOptions(activeShelf)
   const [error, setError] = useState('')
@@ -357,6 +359,11 @@ function App() {
       return
     }
 
+    const interactiveTarget = event.target.closest('button, a, input, textarea, select')
+    if (interactiveTarget) {
+      return
+    }
+
     dragState.current = {
       active: true,
       startX: event.clientX,
@@ -466,6 +473,74 @@ function App() {
         ) : null}
 
       </header>
+
+      {selectedBook ? (
+        <div className="book-detail-backdrop" onClick={() => setSelectedBook(null)}>
+          <div className="book-detail-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="book-detail-header">
+              <div className="profile-modal-header-spacer" />
+              <button
+                type="button"
+                className="toolbar-clear-button"
+                onClick={() => setSelectedBook(null)}
+                aria-label="Close book details"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="book-detail-content">
+              <div>
+                <div className="book-detail-cover">
+                  <img src={selectedBook.imageUrl} alt={`${selectedBook.title} cover`} />
+                </div>
+
+                <div className="book-detail-links">
+                  <a href={selectedBook.link} target="_blank" rel="noreferrer" className="book-detail-link">
+                    Goodreads
+                  </a>
+                </div>
+              </div>
+              <div className="book-detail-body">
+                <h2>{selectedBook.title}</h2>
+                <p className="book-detail-author">{selectedBook.author}</p>
+
+
+                <div className="book-detail-grid">
+                  <div className="book-detail-metric">
+                    {selectedBook.rating ? (
+                      <div className="book-detail-rating">
+                        <span className="book-detail-label">Rating</span>
+                        <div className="book-rating" style={{ justifyContent: 'left' }} aria-label={`User rating: ${selectedBook.rating} out of 5`}>
+                          {renderStars(selectedBook.rating)}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="book-detail-metric">
+                    {selectedBook.averageRating ? (
+                      <div className="book-detail-rating">
+                        <span className="book-detail-label">Goodreads rating</span>
+                        <strong>{selectedBook.averageRating.toFixed(2)}</strong>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="book-detail-grid">
+                  <div className="book-detail-metric">
+                    <span className="book-detail-label">Publicata</span>
+                    <strong>{selectedBook.publishedYear || 'N/A'}</strong>
+                  </div>
+                  <div className="book-detail-metric">
+                    <span className="book-detail-label">Pagini</span>
+                    <strong>{selectedBook.pages ? selectedBook.pages.toLocaleString() : 'N/A'}</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {showProfileModal ? (
         <div className="profile-modal-backdrop" onClick={() => setShowProfileModal(false)}>
@@ -652,6 +727,21 @@ function App() {
                       {book.averageRating.toFixed(2)}
                     </div>
                   ) : null}
+
+                  <button
+                    type="button"
+                    className="book-preview-button"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setSelectedBook(book)
+                    }}
+                    aria-label={`Open details for ${book.title}`}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M1.5 12S5 4.5 12 4.5 22.5 12 22.5 12 19 19.5 12 19.5 1.5 12 1.5 12Zm10.5 3.75A3.75 3.75 0 1 1 12 8.25a3.75 3.75 0 0 1 0 7.5Z" />
+                    </svg>
+                  </button>
                 </div>
               </article>
             ))}
