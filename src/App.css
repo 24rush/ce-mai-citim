@@ -331,17 +331,19 @@
 
 .carousel-panel {
   display: flex;
-  grid-template-columns: 48px minmax(0, 1fr) 48px;
+  width: 100%;
   align-items: center;
   gap: 20px;
 }
 
 .books-carousel {
   display: flex;
-  width: 90%;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
   gap: 12px;
   overflow-x: auto;  
-  padding: 18px 8px 12px;
+  padding: 50px 8px 20px;
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.6) transparent;
   cursor: grab;
@@ -363,15 +365,27 @@
 }
 
 .book-card {
+  --card-scale: 1;
+  --card-translate-y: 0px;
+  --card-opacity: 1;
   min-width: 200px;
   scroll-snap-align: start;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;}
+  gap: 14px;
+  transform: translateY(var(--card-translate-y));
+  opacity: var(--card-opacity);
+  transition: transform 0.18s ease, opacity 0.18s ease;
+  will-change: transform, opacity;
+}
 
 .book-cover-surface {
   pointer-events: none;
+  transform: scale(var(--card-scale));
+  transform-origin: center bottom;
+  transition: transform 0.18s ease;
+  will-change: transform;
 }
 
 .book-cover-art {
@@ -499,6 +513,7 @@
 }
 
 .nav-button {
+  flex-shrink: 0;
   width: 48px;
   height: 48px;
   border: none;
@@ -592,7 +607,6 @@
 
   .carousel-panel {
     gap: 12px;
-    grid-template-columns: 36px minmax(0, 1fr) 36px;
   }
 
   .book-card {
@@ -602,5 +616,6 @@
   .nav-button {
     width: 36px;
     height: 36px;
+    flex-shrink: 0;
   }
 }

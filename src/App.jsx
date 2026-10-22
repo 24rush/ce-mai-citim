@@ -384,6 +384,50 @@ function App() {
     dragState.current.active = false
   }
 
+  const syncBookCoverFocus = () => {
+    if (!carouselRef.current) {
+      return
+    }
+
+    const carousel = carouselRef.current
+    const carouselCenter = carousel.scrollLeft + carousel.clientWidth / 2
+    const cards = carousel.querySelectorAll('.book-card')
+
+    cards.forEach((card) => {
+      const rect = card.getBoundingClientRect()
+      const cardCenter = rect.left + rect.width / 2
+      const distanceFromCenter = Math.abs(cardCenter - (carousel.getBoundingClientRect().left + carousel.clientWidth / 2))
+      const maxDistance = carousel.clientWidth * 0.72
+      const ratio = Math.max(0, 1 - distanceFromCenter / maxDistance)
+      const scale = 0.85 + ratio * 0.28
+      const translateY = (1 - ratio) * 14
+      const opacity = 0.75 + ratio * 0.25
+
+      card.style.setProperty('--card-scale', String(scale))
+      card.style.setProperty('--card-translate-y', `${translateY}px`)
+      card.style.setProperty('--card-opacity', String(opacity))
+    })
+  }
+
+  useEffect(() => {
+    if (!carouselRef.current || visibleBooks.length === 0) {
+      return undefined
+    }
+
+    const carousel = carouselRef.current
+    syncBookCoverFocus()
+
+    const handleScroll = () => syncBookCoverFocus()
+
+    carousel.addEventListener('scroll', handleScroll, { passive: true })
+    window.addEventListener('resize', handleScroll)
+
+    return () => {
+      carousel.removeEventListener('scroll', handleScroll)
+      window.removeEventListener('resize', handleScroll)
+    }
+  }, [visibleBooks.length, activeShelf, activeAuthorFilter, activeBookSort])
+
   return (
     <main className="app-shell">
       <header className="library-header">
