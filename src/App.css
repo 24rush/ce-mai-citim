@@ -514,6 +514,13 @@
   line-height: 1.2;
 }
 
+.book-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
 .book-preview-button {
   display: inline-flex;
   align-items: center;
@@ -521,6 +528,7 @@
   width: 34px;
   height: 34px;    
   border-radius: 50%;
+  border: 1px solid rgba(196, 181, 253, 0.22);
   background: rgba(139, 92, 246, 0.12);
   color: #f5f3ff;
   cursor: pointer;
@@ -535,10 +543,8 @@
 
 .book-preview-button svg {
   width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8;
+  height: 16px;  
+  stroke: currentColor;  
   stroke-linecap: round;
   stroke-linejoin: round;
 }

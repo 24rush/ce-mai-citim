@@ -41,6 +41,14 @@ export const buildGoodreadsRssUrl = (value, shelf = 'read') => {
   return `https://proxy.cors.dev/https://www.goodreads.com/review/list_rss/${userId}?${params.toString()}`
 }
 
+export const buildBookShareUrl = (userId, shelf, bookId, origin = window.location.origin) => {
+  if (!userId || !shelf || !bookId) {
+    return ''
+  }
+
+  return `${origin.replace(/\/$/, '')}/${userId}/${shelf}/${encodeURIComponent(bookId)}`
+}
+
 export const extractBookUrlFromDescription = (descriptionHtml = '') => {
   if (!descriptionHtml) {
     return ''

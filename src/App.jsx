@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import { BookCover } from 'book-cover-3d'
 import {
+  buildBookShareUrl,
   buildGoodreadsApiUrl,
   extractBookUrlFromDescription,
   extractDescriptionMetadata,
@@ -46,6 +47,22 @@ const getBookSortOptions = (shelfId) => {
   return BOOK_SORT_OPTIONS
 }
 
+const getRouteStateFromPath = (pathname = window.location.pathname) => {
+  const segments = pathname.split('/').filter(Boolean)
+  const userSegment = segments[0] || ''
+  const shelfSegment = segments[1] || 'read'
+  const bookSegment = segments[2] || ''
+
+  const userId = extractGoodreadsUserId(userSegment)
+  const shelf = SHELF_OPTIONS.some((option) => option.id === shelfSegment) ? shelfSegment : 'read'
+
+  return {
+    userId,
+    shelf,
+    bookId: bookSegment,
+  }
+}
+
 export const parseRssBooks = (xmlText) => {
   const parser = new DOMParser()
   const xml = parser.parseFromString(xmlText, 'application/xml')
@@ -65,13 +82,14 @@ export const parseRssBooks = (xmlText) => {
         const bookNode = item.querySelector('book') || item
 
         const title = item.querySelector('title')?.textContent?.trim() || `Book ${index + 1}`
+        const bookIdFromFeed = item.querySelector('book_id')?.textContent?.trim() || bookNode.querySelector('book_id')?.textContent?.trim() || ''
 
         const descriptionText = item.querySelector('description')?.textContent || ''
         const descriptionMeta = extractDescriptionMetadata(descriptionText)
         const descriptionBookUrl = extractBookUrlFromDescription(item.querySelector('description')?.innerHTML || '')
 
         const link = descriptionBookUrl ||
-          `https://www.goodreads.com/book/show/${item.querySelector('book_id')?.textContent?.trim() || bookNode.querySelector('book_id')?.textContent?.trim() || ''}` || '#'
+          `https://www.goodreads.com/book/show/${bookIdFromFeed}` || '#'
 
         const imageUrl =
           bookNode.querySelector('book_large_image_url')?.textContent?.trim() ||
@@ -96,7 +114,8 @@ export const parseRssBooks = (xmlText) => {
         const thickness = Number.isFinite(pages) && pages > 0 ? Math.min(Math.max(Math.round(pages / 8), 18), 80) : 35
 
         return {
-          id: `${title}-${index}`,
+          id: bookIdFromFeed || `${title}-${index}`,
+          bookId: bookIdFromFeed || `${title}-${index}`,
           title,
           author: item.querySelector('author_name')?.textContent?.trim(),
           imageUrl,
@@ -135,6 +154,7 @@ function App() {
   const [profileUrlInput, setProfileUrlInput] = useState('')
   const [generatedProfileUrl, setGeneratedProfileUrl] = useState('')
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('')
+  const [requestedBookId, setRequestedBookId] = useState(() => getRouteStateFromPath().bookId)
   const [selectedBook, setSelectedBook] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const availableBookSortOptions = getBookSortOptions(activeShelf)
@@ -143,14 +163,21 @@ function App() {
   const dragState = useRef({ active: false, startX: 0, scrollLeft: 0 })
 
   useEffect(() => {
-    const syncUserId = () => {
-      setCurrentUserId(extractGoodreadsUserId(window.location.pathname) || '')
+    const syncRouteState = () => {
+      const { userId, shelf, bookId } = getRouteStateFromPath(window.location.pathname)
+
+      if (userId) {
+        setCurrentUserId(userId)
+      }
+
+      setActiveShelf(shelf)
+      setRequestedBookId(bookId)
     }
 
-    window.addEventListener('popstate', syncUserId)
-    syncUserId()
+    window.addEventListener('popstate', syncRouteState)
+    syncRouteState()
 
-    return () => window.removeEventListener('popstate', syncUserId)
+    return () => window.removeEventListener('popstate', syncRouteState)
   }, [])
 
   useEffect(() => {
@@ -199,6 +226,28 @@ function App() {
       setActiveBookSort(availableBookSortOptions[0]?.id || 'recently-read')
     }
   }, [activeBookSort, availableBookSortOptions])
+
+  useEffect(() => {
+    if (!requestedBookId) {
+      setSelectedBook(null)
+      return
+    }
+
+    if (!books.length) {
+      return
+    }
+
+    const matchedBook = books.find((book) => String(book.bookId || book.id) === String(requestedBookId))
+
+    if (matchedBook) {
+      setSelectedBook(matchedBook)
+      setError('')
+      return
+    }
+
+    setSelectedBook(null)
+    setError('Cartea nu a fost găsită pe acest raft.')
+  }, [books, requestedBookId])
 
   const authorOptions = useMemo(() => {
     const counts = new Map()
@@ -283,6 +332,97 @@ function App() {
         ★
       </span>
     ))
+  }
+
+  const openBookDetails = (book) => {
+    if (!book || !currentUserId) {
+      return
+    }
+
+    const bookId = String(book.bookId || book.id)
+    const nextPath = `/${currentUserId}/${activeShelf}/${encodeURIComponent(bookId)}`
+    window.history.pushState({}, '', nextPath)
+    setRequestedBookId(bookId)
+    setSelectedBook(book)
+    setError('')
+  }
+
+  const shareBookLink = async (book) => {
+    if (!book || !currentUserId) {
+      return
+    }
+
+    const bookId = String(book.bookId || book.id)
+    const shareUrl = buildBookShareUrl(currentUserId, activeShelf, bookId, window.location.origin)
+
+    if (!shareUrl) {
+      return
+    }
+
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: book.title,
+          text: `Vezi cartea: ${book.title}`,
+          url: shareUrl,
+        })
+        return
+      }
+
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(shareUrl)
+      }
+    } catch (shareError) {
+      console.error(shareError)
+      try {
+        if (navigator.clipboard) {
+          await navigator.clipboard.writeText(shareUrl)
+        }
+      } catch (copyError) {
+        console.error(copyError)
+      }
+    }
+  }
+
+  const closeBookDetails = () => {
+    const routePath = currentUserId ? `/${currentUserId}/${activeShelf}` : '/'
+    window.history.pushState({}, '', routePath)
+    setRequestedBookId('')
+    setSelectedBook(null)
+    setError('')
+  }
+
+  const handleShareBookLink = async () => {
+    if (!selectedBook || !currentUserId) {
+      return
+    }
+
+    const bookId = String(selectedBook.bookId || selectedBook.id)
+    const shareUrl = buildBookShareUrl(currentUserId, activeShelf, bookId, window.location.origin)
+
+    if (!shareUrl) {
+      return
+    }
+
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: selectedBook.title,
+          text: `Vezi cartea: ${selectedBook.title}`,
+          url: shareUrl,
+        })
+        return
+      }
+
+      await navigator.clipboard.writeText(shareUrl)
+    } catch (shareError) {
+      console.error(shareError)
+      try {
+        await navigator.clipboard.writeText(shareUrl)
+      } catch (copyError) {
+        console.error(copyError)
+      }
+    }
   }
 
   const handleProfileUrlInput = (event) => {
@@ -464,7 +604,13 @@ function App() {
                 key={shelf.id}
                 type="button"
                 className={shelf.id === activeShelf ? 'shelf-pill active' : 'shelf-pill'}
-                onClick={() => setActiveShelf(shelf.id)}
+                onClick={() => {
+                  setActiveShelf(shelf.id)
+                  const nextPath = currentUserId ? `/${currentUserId}/${shelf.id}` : `/${shelf.id}`
+                  window.history.pushState({}, '', nextPath)
+                  setRequestedBookId('')
+                  setSelectedBook(null)
+                }}
               >
                 {shelf.label}
               </button>
@@ -475,14 +621,14 @@ function App() {
       </header>
 
       {selectedBook ? (
-        <div className="book-detail-backdrop" onClick={() => setSelectedBook(null)}>
+        <div className="book-detail-backdrop" onClick={closeBookDetails}>
           <div className="book-detail-modal" onClick={(event) => event.stopPropagation()}>
             <div className="book-detail-header">
               <div className="profile-modal-header-spacer" />
               <button
                 type="button"
                 className="toolbar-clear-button"
-                onClick={() => setSelectedBook(null)}
+                onClick={closeBookDetails}
                 aria-label="Close book details"
               >
                 ×
@@ -499,6 +645,9 @@ function App() {
                   <a href={selectedBook.link} target="_blank" rel="noreferrer" className="book-detail-link">
                     Goodreads
                   </a>
+                  <button type="button" className="book-detail-link share-link" onClick={handleShareBookLink}>
+                    Share
+                  </button>
                 </div>
               </div>
               <div className="book-detail-body">
@@ -728,20 +877,36 @@ function App() {
                     </div>
                   ) : null}
 
-                  <button
-                    type="button"
-                    className="book-preview-button"
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      setSelectedBook(book)
-                    }}
-                    aria-label={`Open details for ${book.title}`}
-                  >
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M1.5 12S5 4.5 12 4.5 22.5 12 22.5 12 19 19.5 12 19.5 1.5 12 1.5 12Zm10.5 3.75A3.75 3.75 0 1 1 12 8.25a3.75 3.75 0 0 1 0 7.5Z" />
-                    </svg>
-                  </button>
+                  <div className="book-actions">
+                    <button
+                      type="button"
+                      className="book-preview-button"
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        openBookDetails(book)
+                      }}
+                      aria-label={`Open details for ${book.title}`}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" strokeWidth={0.4} width="16" height="16" fill="currentColor" class="bi bi-eye" viewBox="0 0 16 16">
+                        <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8M1.173 8a13 13 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5s3.879 1.168 5.168 2.457A13 13 0 0 1 14.828 8q-.086.13-.195.288c-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5s-3.879-1.168-5.168-2.457A13 13 0 0 1 1.172 8z" />
+                        <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0" />
+                      </svg>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="book-preview-button book-share-button"
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        shareBookLink(book)
+                      }}
+                      aria-label={`Share link for ${book.title}`}
+                    >
+                      <svg fill="#ffffff" height="200px" width="200px" version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512" xml:space="preserve" transform="matrix(-1, 0, 0, 1, 0, 0)"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <g> <g> <path d="M384,153.6c-39.799,0-74.906,18.543-98.381,47.027l-138.812-92.535c4.284-9.583,6.793-20.122,6.793-31.292 C153.6,34.381,119.219,0,76.8,0C34.381,0,0,34.381,0,76.8c0,42.419,34.381,76.8,76.8,76.8c22.025,0,41.745-9.395,55.757-24.252 l138.854,92.578C261.897,239.821,256,259.925,256,281.6c0,14.362,2.901,27.93,7.262,40.815l-73.95,33.613 C171.273,326.835,139.247,307.2,102.4,307.2C45.85,307.2,0,353.05,0,409.6C0,466.15,45.85,512,102.4,512 c56.559,0,102.4-45.85,102.4-102.4c0-10.581-2.065-20.591-5.043-30.191l74.078-33.673C296.021,383.761,336.802,409.6,384,409.6 c70.69,0,128-57.31,128-128S454.69,153.6,384,153.6z M76.8,128c-28.228,0-51.2-22.972-51.2-51.2s22.972-51.2,51.2-51.2 S128,48.572,128,76.8S105.028,128,76.8,128z M102.4,486.4c-42.351,0-76.8-34.449-76.8-76.8s34.449-76.8,76.8-76.8 c42.351,0,76.8,34.449,76.8,76.8S144.751,486.4,102.4,486.4z M384,384c-56.465,0-102.4-45.935-102.4-102.4 c0-56.465,45.935-102.4,102.4-102.4c56.465,0,102.4,45.935,102.4,102.4C486.4,338.065,440.465,384,384,384z"></path> </g> </g> </g></svg>
+                    </button>
+                  </div>
                 </div>
               </article>
             ))}

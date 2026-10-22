@@ -5,6 +5,7 @@ import {
   extractGoodreadsUserId,
   buildGoodreadsRssUrl,
   buildGoodreadsApiUrl,
+  buildBookShareUrl,
   extractDescriptionMetadata,
   extractBookUrlFromDescription,
 } from './goodreads.js'
@@ -37,6 +38,13 @@ test('builds a shelf-specific proxied Goodreads API URL for the browser', () => 
 
 test('returns an empty RSS URL when no user id can be found', () => {
   assert.equal(buildGoodreadsRssUrl('/'), '')
+})
+
+test('builds a book share URL with the Goodreads user, shelf, and book id', () => {
+  assert.equal(
+    buildBookShareUrl('18354013', 'read', '123456', 'https://example.com'),
+    'https://example.com/18354013/read/123456',
+  )
 })
 
 test('extracts read date, average rating, and published year from the Goodreads description block', () => {
