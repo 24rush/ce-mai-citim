@@ -8,6 +8,7 @@ import {
   buildBookShareUrl,
   extractDescriptionMetadata,
   extractBookUrlFromDescription,
+  getFinishedBooksTotals,
 } from './goodreads.js'
 
 test('extracts user id from Goodreads homepage URL', () => {
@@ -47,7 +48,7 @@ test('builds a book share URL with the Goodreads user, shelf, and book id', () =
   )
 })
 
-test('extracts read date, average rating, and published year from the Goodreads description block', () => {
+test('extracts the read date, average rating, and published year from the Goodreads description block', () => {
   const description = `
     <a href="https://www.goodreads.com/book/show/10884.Einstein?utm_medium=api&amp;utm_source=rss">
       <img alt="Einstein: His Life and Universe" src="https://i.gr-assets.com/images/S/compressed.photo.goodreads.com/books/1328011405l/10884._SY75_.jpg" />
@@ -69,6 +70,21 @@ test('extracts read date, average rating, and published year from the Goodreads 
   assert.equal(result.averageRating, '4.16')
   assert.equal(result.publishedYear, '2007')
   assert.equal(result.rating, '3')
+})
+
+test('counts completed books and pages finished in a given year', () => {
+  const books = [
+    { pages: 320, readAt: '2026/01/10' },
+    { pages: 280, readAt: '2026/08/12' },
+    { pages: 410, readAt: '2025/12/31' },
+    { pages: 225, readAt: '2026/02/03' },
+    { pages: 144, readAt: '2024/11/04' },
+  ]
+
+  const summary = getFinishedBooksTotals(books, 2026)
+
+  assert.equal(summary.count, 3)
+  assert.equal(summary.totalPages, 320 + 280 + 225)
 })
 
 test('extracts the first book URL from the Goodreads description block', () => {

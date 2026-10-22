@@ -95,3 +95,30 @@ export const extractDescriptionMetadata = (descriptionHtml = '') => {
     rating: ratingMatch?.[1]?.trim() || '',
   }
 }
+
+export const getFinishedBooksTotals = (books = [], year) => {
+  if (!Number.isInteger(year)) {
+    return { count: 0, totalPages: 0 }
+  }
+
+  let count = 0
+  let totalPages = 0
+
+  books.forEach((book) => {
+    const readDate = book.readAt || ''
+    if (!readDate) {
+      return
+    }
+
+    const yearMatch = String(readDate).match(/^(\d{4})/)
+    if (!yearMatch || Number(yearMatch[1]) !== year) {
+      return
+    }
+
+    const pages = Number(book.pages) || 0
+    count += 1
+    totalPages += pages
+  })
+
+  return { count, totalPages }
+}

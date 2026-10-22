@@ -36,6 +36,18 @@
   gap: 16px;
 }
 
+.reading-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 6px;
+  margin-top: 2px;
+  margin-bottom: 18px;
+  color: #cbd5e1;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
 .profile-url-trigger {
   border: 2px solid rgba(139, 92, 246, 0.7);
   background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(168, 85, 247, 0.18));
@@ -205,7 +217,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 10px 14px;
+  padding: 5px 14px;
   border-radius: 10px;
   background: linear-gradient(135deg, var(--accent-color), #7c3aed);
   color: #fff;
@@ -518,7 +530,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 16px;
 }
 
 .book-preview-button {

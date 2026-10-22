@@ -7,6 +7,7 @@ import {
   extractBookUrlFromDescription,
   extractDescriptionMetadata,
   extractGoodreadsUserId,
+  getFinishedBooksTotals,
 } from './lib/goodreads'
 import './App.css'
 
@@ -105,6 +106,7 @@ export const parseRssBooks = (xmlText) => {
 
         const rawPages = bookNode.querySelector('num_pages')?.textContent?.trim() || '0'
         const readAt = descriptionMeta.readAt || ''
+        const finishedAt = descriptionMeta.finishedAt || readAt || ''
         const averageRating = Number.parseFloat(descriptionMeta.averageRating || '0')
 
         const publishedYear = Number.parseInt(descriptionMeta.publishedYear || '0', 10)
@@ -124,6 +126,7 @@ export const parseRssBooks = (xmlText) => {
           thickness,
           pages: Number.isFinite(pages) && pages > 0 ? pages : 0,
           readAt,
+          finishedAt,
           averageRating: Number.isFinite(averageRating) ? averageRating : 0,
           publishedYear: Number.isFinite(publishedYear) ? publishedYear : 0,
         }
@@ -290,6 +293,7 @@ function App() {
   }, [activeAuthorFilter, books])
 
   const activeSort = availableBookSortOptions.find((option) => option.id === activeBookSort) || availableBookSortOptions[0]
+  const yearlySummary = useMemo(() => getFinishedBooksTotals(books, 2026), [books])
 
   const visibleBooks = useMemo(() => {
     const sortOption = activeSort
@@ -597,6 +601,14 @@ function App() {
           )}
         </div>
 
+        {yearlySummary.count > 5 && yearlySummary.totalPages > 0 ? (
+          <div className="reading-summary book-detail-label" aria-live="polite">
+            <span>{yearlySummary.count} cărți citite în 2026</span>
+            <span>// {yearlySummary.totalPages.toLocaleString()} pagini</span>
+          </div>
+        ) : null
+        }
+
         {username ? (
           <div className="shelf-pills" aria-label="Book shelves">
             {SHELF_OPTIONS.map((shelf) => (
@@ -677,7 +689,7 @@ function App() {
                 </div>
                 <div className="book-detail-grid">
                   <div className="book-detail-metric">
-                    <span className="book-detail-label">Publicata</span>
+                    <span className="book-detail-label">An publicare</span>
                     <strong>{selectedBook.publishedYear || 'N/A'}</strong>
                   </div>
                   <div className="book-detail-metric">
