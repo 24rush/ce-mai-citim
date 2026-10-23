@@ -157,6 +157,7 @@ function App() {
   const [profileUrlInput, setProfileUrlInput] = useState('')
   const [generatedProfileUrl, setGeneratedProfileUrl] = useState('')
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('')
+  const [bookQrCodeDataUrl, setBookQrCodeDataUrl] = useState('')
   const [requestedBookId, setRequestedBookId] = useState(() => getRouteStateFromPath().bookId)
   const [selectedBook, setSelectedBook] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -258,6 +259,17 @@ function App() {
     setSelectedBook(null)
     setError('Cartea nu a fost găsită pe acest raft.')
   }, [books, requestedBookId])
+
+  useEffect(() => {
+    if (!selectedBook?.link) {
+      setBookQrCodeDataUrl('')
+      return
+    }
+
+    QRCode.toDataURL(selectedBook.link)
+      .then((dataUrl) => setBookQrCodeDataUrl(dataUrl))
+      .catch(() => setBookQrCodeDataUrl(''))
+  }, [selectedBook?.link])
 
   const authorOptions = useMemo(() => {
     const counts = new Map()
@@ -402,6 +414,8 @@ function App() {
     setSelectedBook(null)
     setError('')
   }
+
+  const shouldShowCarouselNavigation = Boolean(currentUserId || username)
 
   const handleShareBookLink = async () => {
     if (!selectedBook || !currentUserId) {
@@ -678,36 +692,25 @@ function App() {
                 <h2>{selectedBook.title}</h2>
                 <p className="book-detail-author">{selectedBook.author}</p>
 
-
-                <div className="book-detail-grid">
-                  <div className="book-detail-metric">
-                    {selectedBook.rating ? (
-                      <div className="book-detail-rating">
-                        <span className="book-detail-label">Rating</span>
-                        <div className="book-rating" style={{ justifyContent: 'left' }} aria-label={`User rating: ${selectedBook.rating} out of 5`}>
-                          {renderStars(selectedBook.rating)}
-                        </div>
-                      </div>
-                    ) : null}
+                <div className="book-details">
+                  <div className="book-detail-grid">
+                    <div className="book-detail-metric">
+                      <span className="book-detail-label">An</span>
+                      <strong>{selectedBook.publishedYear || 'N/A'}</strong>
+                    </div>
+                    <div className="book-detail-metric">
+                      <span className="book-detail-label">Pagini</span>
+                      <strong>{selectedBook.pages ? selectedBook.pages.toLocaleString() : 'N/A'}</strong>
+                    </div>
                   </div>
-                  <div className="book-detail-metric">
-                    {selectedBook.averageRating ? (
-                      <div className="book-detail-rating">
-                        <span className="book-detail-label">Goodreads rating</span>
-                        <strong>{selectedBook.averageRating.toFixed(2)}</strong>
-                      </div>
+                  <div className="book-detail-qr-box">
+                    {bookQrCodeDataUrl ? (
+                      <img src={bookQrCodeDataUrl} alt={`QR code for ${selectedBook.title}`} className="book-detail-qr-image" />
                     ) : null}
                   </div>
                 </div>
+
                 <div className="book-detail-grid">
-                  <div className="book-detail-metric">
-                    <span className="book-detail-label">An publicare</span>
-                    <strong>{selectedBook.publishedYear || 'N/A'}</strong>
-                  </div>
-                  <div className="book-detail-metric">
-                    <span className="book-detail-label">Pagini</span>
-                    <strong>{selectedBook.pages ? selectedBook.pages.toLocaleString() : 'N/A'}</strong>
-                  </div>
                 </div>
               </div>
             </div>
@@ -775,7 +778,9 @@ function App() {
 
       {error ? <div className="status-banner">{error}</div> : null}
 
-      {!isLoading && books.length > 0 ? (
+      {isLoading ? (
+        <div className="book-controls book-controls-placeholder" aria-hidden="true" />
+      ) : books.length > 0 ? (
         <div className="book-controls" aria-label="Book controls">
           <div className="toolbar-group">
             <select
@@ -829,7 +834,7 @@ function App() {
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
       >
-        {username ? (
+        {shouldShowCarouselNavigation ? (
           <button
             type="button"
             className="nav-button"
@@ -937,7 +942,7 @@ function App() {
           </div>
         )}
 
-        {username ? (
+        {shouldShowCarouselNavigation ? (
           <button
             type="button"
             className="nav-button"
