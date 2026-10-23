@@ -16,11 +16,12 @@
 }
 
 .library-header h1 {
-  margin: 0;
+  margin: 12px 8px;
   font-size: clamp(2.25rem, 5vw, 4rem);
   line-height: 1;
   letter-spacing: -0.04em;
   font-weight: 900;
+  word-break: break-word;
   color: #f8fafc;
 }
 
@@ -29,20 +30,16 @@
 }
 
 .library-header-row {
-  display: flex;
-  flex-direction: row-reverse;
+  display: flex;  
+  flex-direction: column;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  justify-content: space-between;  
 }
 
 .reading-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-left: 6px;
-  margin-top: 2px;
-  margin-bottom: 18px;
+  gap: 6px;  
   color: #cbd5e1;
   font-size: 0.95rem;
   font-weight: 600;
@@ -53,7 +50,7 @@
   background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(168, 85, 247, 0.18));
   color: #f5f3ff;
   border-radius: 999px;
-  padding: 8px 16px;
+  padding: 5px 12px;
   font-size: 0.92rem;
   font-weight: 600;
   cursor: pointer;
@@ -174,7 +171,7 @@
 }
 
 .book-detail-author {
-  margin: 0;
+  margin-bottom: 18px;
   color: #cbd5e1;
   font-size: 1.05rem;
 }
@@ -191,13 +188,13 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  justify-content: center;
 }
 
 .book-detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(120px, 1fr));
-  gap: 12px;
-  margin-top: 18px;
+  gap: 12px;  
 }
 
 .book-detail-metric strong,
@@ -321,6 +318,7 @@
 .shelf-pills {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 10px;
   margin-top: 18px;
   margin-bottom: 30px;

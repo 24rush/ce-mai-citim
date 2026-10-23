@@ -225,10 +225,17 @@ function App() {
   }, [activeShelf, currentUserId])
 
   useEffect(() => {
-    if (!availableBookSortOptions.some((option) => option.id === activeBookSort)) {
-      setActiveBookSort(availableBookSortOptions[0]?.id || 'recently-read')
+    const defaultSortForShelf = activeShelf === 'read' ? 'recently-read' : (getBookSortOptions(activeShelf)[0]?.id || 'newest')
+
+    if (activeShelf === 'read' && activeBookSort !== 'recently-read') {
+      setActiveBookSort('recently-read')
+      return
     }
-  }, [activeBookSort, availableBookSortOptions])
+
+    if (activeShelf !== 'read' && (!availableBookSortOptions.some((option) => option.id === activeBookSort) || activeBookSort === 'recently-read')) {
+      setActiveBookSort(defaultSortForShelf)
+    }
+  }, [activeBookSort, activeShelf, availableBookSortOptions])
 
   useEffect(() => {
     if (!requestedBookId) {
