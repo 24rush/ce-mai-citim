@@ -562,7 +562,8 @@
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.6) transparent;
   cursor: grab;
-  touch-action: pan-y;
+  touch-action: pan-x pan-y;
+  -webkit-overflow-scrolling: touch;
   user-select: none;
 }
 
@@ -596,7 +597,6 @@
   align-items: center;
   gap: 14px;
   transform: translateY(var(--card-translate-y));
-  transition: transform 0.18s ease, opacity 0.18s ease;
   will-change: transform, opacity;
   box-shadow: none !important;
 }
@@ -612,8 +612,16 @@
   pointer-events: none;
   transform: scale(var(--card-scale));
   transform-origin: center bottom;
-  transition: transform 0.18s ease;
   will-change: transform;
+}
+
+.book-cover-surface .book::before {
+  left: auto !important;
+  right: 0 !important;
+  width: 20px !important;
+  transform: translateZ(0px) !important;
+  border-radius: 0 2px 2px 0;
+  box-shadow: inset 1px 0 3px rgba(0, 0, 0, 0.25);
 }
 
 .book-cover-art {

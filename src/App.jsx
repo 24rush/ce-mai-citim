@@ -172,6 +172,7 @@ function App() {
   const [error, setError] = useState('')
   const carouselRef = useRef(null)
   const dragState = useRef({ active: false, startX: 0, scrollLeft: 0 })
+  const rafIdRef = useRef(null)
 
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
 
@@ -550,6 +551,10 @@ function App() {
       return
     }
 
+    if (event.pointerType === 'touch') {
+      return
+    }
+
     const interactiveTarget = event.target.closest('button, a, input, textarea, select')
     if (interactiveTarget) {
       return
@@ -565,7 +570,7 @@ function App() {
   }
 
   const handlePointerMove = (event) => {
-    if (!dragState.current.active || !carouselRef.current) {
+    if (!dragState.current.active || !carouselRef.current || event.pointerType === 'touch') {
       return
     }
 
@@ -576,7 +581,7 @@ function App() {
   }
 
   const handlePointerUp = (event) => {
-    if (!carouselRef.current) {
+    if (!carouselRef.current || event.pointerType === 'touch') {
       return
     }
 
@@ -592,23 +597,35 @@ function App() {
       return
     }
 
-    const carousel = carouselRef.current
-    const carouselCenter = carousel.scrollLeft + carousel.clientWidth / 2
-    const cards = carousel.querySelectorAll('.book-card')
+    if (rafIdRef.current) {
+      return
+    }
 
-    cards.forEach((card) => {
-      const rect = card.getBoundingClientRect()
-      const cardCenter = rect.left + rect.width / 2
-      const distanceFromCenter = Math.abs(cardCenter - (carousel.getBoundingClientRect().left + carousel.clientWidth / 2))
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = null
+      if (!carouselRef.current) {
+        return
+      }
+
+      const carousel = carouselRef.current
+      const carouselRect = carousel.getBoundingClientRect()
+      const carouselCenter = carouselRect.left + carousel.clientWidth / 2
       const maxDistance = carousel.clientWidth * 0.72
-      const ratio = Math.max(0, 1 - distanceFromCenter / maxDistance)
-      const scale = 0.85 + ratio * 0.28
-      const translateY = (1 - ratio) * 14
-      const opacity = 0.75 + ratio * 0.25
+      const cards = carousel.querySelectorAll('.book-card')
 
-      card.style.setProperty('--card-scale', String(scale))
-      card.style.setProperty('--card-translate-y', `${translateY}px`)
-      card.style.setProperty('--card-opacity', String(opacity))
+      cards.forEach((card) => {
+        const rect = card.getBoundingClientRect()
+        const cardCenter = rect.left + rect.width / 2
+        const distanceFromCenter = Math.abs(cardCenter - carouselCenter)
+        const ratio = Math.max(0, 1 - distanceFromCenter / maxDistance)
+        const scale = 0.85 + ratio * 0.28
+        const translateY = (1 - ratio) * 14
+        const opacity = 0.75 + ratio * 0.25
+
+        card.style.setProperty('--card-scale', scale.toFixed(3))
+        card.style.setProperty('--card-translate-y', `${translateY.toFixed(1)}px`)
+        card.style.setProperty('--card-opacity', opacity.toFixed(3))
+      })
     })
   }
 
@@ -628,6 +645,10 @@ function App() {
     return () => {
       carousel.removeEventListener('scroll', handleScroll)
       window.removeEventListener('resize', handleScroll)
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current)
+        rafIdRef.current = null
+      }
     }
   }, [visibleBooks.length, activeShelf, activeAuthorFilter, activeBookSort])
 
