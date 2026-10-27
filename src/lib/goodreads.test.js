@@ -22,6 +22,11 @@ test('extracts user id from a /{user_id} pathname', () => {
   assert.equal(extractGoodreadsUserId('/18354013'), '18354013')
 })
 
+test('extracts user id from nested /{user_id}/{shelf} pathname', () => {
+  assert.equal(extractGoodreadsUserId('/18354013/read'), '18354013')
+  assert.equal(extractGoodreadsUserId('/18354013/read/12345'), '18354013')
+})
+
 test('builds RSS URL from a pathname ending in a user id', () => {
   assert.equal(
     buildGoodreadsRssUrl('/18354013'),

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import { BookCover } from 'book-cover-3d'
+import { ArrowUpDown, BookOpen, Share2, SquareArrowOutUpRight, UserSearch, WandSparkles } from 'lucide-react'
 import {
   buildBookShareUrl,
   buildGoodreadsApiUrl,
@@ -9,12 +10,15 @@ import {
   extractGoodreadsUserId,
   getFinishedBooksTotals,
 } from './lib/goodreads'
+import GradientASCII from './components/GradientASCII'
+import GooeyNav from './components/GooeyNav'
+import GlideSelect from './components/GlideSelect'
 import './App.css'
 
 const SHELF_OPTIONS = [
   { id: 'read', label: 'Citite', query: 'read' },
   { id: 'to-read', label: 'De citit', query: 'to-read' },
-  { id: 'currently-reading', label: 'În curs de lectură', query: 'currently-reading' },
+  { id: 'currently-reading', label: 'În curs', query: 'currently-reading' },
 ]
 
 const BOOK_SORT_OPTIONS = [
@@ -146,25 +150,42 @@ const fetchBooksFromRss = async (rssUrl) => {
   return parseRssBooks(xmlText)
 }
 
+const DEFAULT_USER_ID = '18354013'
+
 function App() {
+  const initialRouteState = useMemo(() => getRouteStateFromPath(window.location.pathname), [])
   const [books, setBooks] = useState([])
   const [username, setUsername] = useState('')
-  const [activeShelf, setActiveShelf] = useState('read')
+  const [activeShelf, setActiveShelf] = useState(() => initialRouteState.shelf || 'read')
   const [activeAuthorFilter, setActiveAuthorFilter] = useState('all')
   const [activeBookSort, setActiveBookSort] = useState('recently-read')
-  const [currentUserId, setCurrentUserId] = useState(() => extractGoodreadsUserId(window.location.pathname) || '')
+  const [currentUserId, setCurrentUserId] = useState(() => initialRouteState.userId || DEFAULT_USER_ID)
   const [showProfileModal, setShowProfileModal] = useState(false)
   const [profileUrlInput, setProfileUrlInput] = useState('')
   const [generatedProfileUrl, setGeneratedProfileUrl] = useState('')
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('')
   const [bookQrCodeDataUrl, setBookQrCodeDataUrl] = useState('')
-  const [requestedBookId, setRequestedBookId] = useState(() => getRouteStateFromPath().bookId)
+  const [requestedBookId, setRequestedBookId] = useState(() => initialRouteState.bookId || '')
   const [selectedBook, setSelectedBook] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
-  const availableBookSortOptions = getBookSortOptions(activeShelf)
+  const availableBookSortOptions = useMemo(() => getBookSortOptions(activeShelf), [activeShelf])
   const [error, setError] = useState('')
   const carouselRef = useRef(null)
   const dragState = useRef({ active: false, startX: 0, scrollLeft: 0 })
+
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768)
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  useEffect(() => {
+    if (window.location.pathname === '/' || window.location.pathname === '') {
+      window.history.replaceState({}, '', `/${DEFAULT_USER_ID}`)
+    }
+  }, [])
 
   useEffect(() => {
     const syncRouteState = () => {
@@ -172,6 +193,8 @@ function App() {
 
       if (userId) {
         setCurrentUserId(userId)
+      } else {
+        setCurrentUserId(DEFAULT_USER_ID)
       }
 
       setActiveShelf(shelf)
@@ -179,54 +202,44 @@ function App() {
     }
 
     window.addEventListener('popstate', syncRouteState)
-    syncRouteState()
-
     return () => window.removeEventListener('popstate', syncRouteState)
   }, [])
 
   useEffect(() => {
+    let isCancelled = false
+    const resolvedUserId = currentUserId || DEFAULT_USER_ID
+    const shelfUrl = buildGoodreadsApiUrl(resolvedUserId, activeShelf)
+
     const loadBooks = async () => {
-      const resolvedUserId = currentUserId || extractGoodreadsUserId(window.location.pathname) || ''
-      const isRootPath = window.location.pathname === '/' || window.location.pathname === ''
-
-      if (!resolvedUserId && isRootPath) {
-        const fallbackUserId = '18354013'
-        window.history.replaceState({}, '', `/${fallbackUserId}`)
-        setCurrentUserId(fallbackUserId)
-        setError('')
-        setIsLoading(false)
-        return
-      }
-
-      if (!resolvedUserId) {
-        setError('Ups! Nu am găsit nimic la această adresă.')
-        setIsLoading(false)
-        return
-      }
-
-      const shelfUrl = buildGoodreadsApiUrl(resolvedUserId, activeShelf)
-
       try {
         setIsLoading(true)
         setError('')
         const { books: rssBooks, username: rssUsername } = await fetchBooksFromRss(shelfUrl)
+        if (isCancelled) return
         setBooks(rssBooks)
         if (rssUsername) {
           setUsername(rssUsername)
         }
       } catch (loadError) {
+        if (isCancelled) return
         console.error(loadError)
         setError('Ups! Nu am găsit nimic la această adresă.')
       } finally {
-        setIsLoading(false)
+        if (!isCancelled) {
+          setIsLoading(false)
+        }
       }
     }
 
     loadBooks()
+
+    return () => {
+      isCancelled = true
+    }
   }, [activeShelf, currentUserId])
 
   useEffect(() => {
-    const defaultSortForShelf = activeShelf === 'read' ? 'recently-read' : (getBookSortOptions(activeShelf)[0]?.id || 'newest')
+    const defaultSortForShelf = activeShelf === 'read' ? 'recently-read' : (availableBookSortOptions[0]?.id || 'newest')
 
     if (activeShelf === 'read' && activeBookSort !== 'recently-read') {
       setActiveBookSort('recently-read')
@@ -293,9 +306,22 @@ function App() {
       })
       .map(([author, count]) => ({
         value: author,
-        label: `${author} (${count})`,
+        label: author,
+        tag: String(count),
       }))
   }, [books])
+
+  const glideAuthorOptions = useMemo(() => [
+    { value: 'all', label: 'Toti autorii', tag: String(books.length) },
+    ...authorOptions,
+  ], [books.length, authorOptions])
+
+  const glideSortOptions = useMemo(() => (
+    availableBookSortOptions.map((option) => ({
+      value: option.id,
+      label: option.label,
+    }))
+  ), [availableBookSortOptions])
 
   useEffect(() => {
     if (activeAuthorFilter !== 'all' && !authorOptions.some((option) => option.value === activeAuthorFilter)) {
@@ -606,355 +632,389 @@ function App() {
   }, [visibleBooks.length, activeShelf, activeAuthorFilter, activeBookSort])
 
   return (
-    <main className="app-shell">
-      <header className="library-header">
-        <div className="library-header-row">
-          <button
-            type="button"
-            className="profile-url-trigger"
-            onClick={() => setShowProfileModal(true)}
-          >
-            Generează URL-ul tău
-          </button>
-          {username ? (
-            <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
-              Ce mai citește <span className="text-violet-300">{username}</span>
-            </h1>
-          ) : (
-            <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
-              Ce mai citim
-            </h1>
-          )}
-        </div>
+    <div style={{ position: 'relative', minHeight: '100vh', width: '100%', overflowX: 'hidden' }}>
+      <div style={{ width: '100%', height: '600px', position: 'absolute', top: 0, left: 0, zIndex: 0, pointerEvents: 'none' }}>
+        <GradientASCII
+          colors={["#4f8ff7", "#e8f0ff", "#b4d0ff", "#7cb4fb"]}
+          shape="horizon"
+          characters="abcdefghijklmnopqrstuvwxyz!@#()_+~`|}{[]:;?><,./-="
+          cellSize={18}
+          density={0.94}
+          glyphOpacity={0.61}
+          glow={0}
+          depthOfField={0}
+          flicker={0.3}
+          softness={0.08}
+          scale={2.1}
+          flow={2}
+          speed={0.25}
+          gradientOpacity={0.9}
+          grain={0.04}
+          variation={0}
+          mouseInteraction
+          scrambleRadius={0.1}
+          clickEffect="wave"
+          intro
+          lightMode
+        />
+      </div>
 
-        {yearlySummary.count > 5 && yearlySummary.totalPages > 0 ? (
-          <div className="reading-summary book-detail-label" aria-live="polite">
-            <span>{yearlySummary.count} cărți citite în 2026</span>
-            <span>// {yearlySummary.totalPages.toLocaleString()} pagini</span>
+      <main className="app-shell" style={{ position: 'relative', zIndex: 1 }}>
+        <header className="library-header">
+          <div className="library-header-row">
+            {username ? (
+              <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
+                Ce mai citește <span className="text-violet-300">{username}</span>
+              </h1>
+            ) : (
+              <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
+                Ce mai citim
+              </h1>
+            )}
           </div>
-        ) : null
-        }
 
-        {username ? (
-          <div className="shelf-pills" aria-label="Book shelves">
-            {SHELF_OPTIONS.map((shelf) => (
-              <button
-                key={shelf.id}
-                type="button"
-                className={shelf.id === activeShelf ? 'shelf-pill active' : 'shelf-pill'}
-                onClick={() => {
+          {yearlySummary.count > 5 && yearlySummary.totalPages > 0 ? (
+            <div className="reading-summary book-detail-label" aria-live="polite">
+              <span>{yearlySummary.count} cărți citite în 2026</span>
+              <span>// {yearlySummary.totalPages.toLocaleString()} pagini</span>
+            </div>
+          ) : null
+          }
+
+          {username ? (
+            <div className="shelf-pills" aria-label="Book shelves">
+              <GooeyNav
+                items={SHELF_OPTIONS.map((shelf) => ({ label: shelf.label }))}
+                activeIndex={Math.max(0, SHELF_OPTIONS.findIndex((shelf) => shelf.id === activeShelf))}
+                onChange={(index) => {
+                  const shelf = SHELF_OPTIONS[index]
+                  if (!shelf) return
                   setActiveShelf(shelf.id)
                   const nextPath = currentUserId ? `/${currentUserId}/${shelf.id}` : `/${shelf.id}`
                   window.history.pushState({}, '', nextPath)
                   setRequestedBookId('')
                   setSelectedBook(null)
                 }}
-              >
-                {shelf.label}
-              </button>
-            ))}
+                theme="dark"
+                color="#8b5cf6"
+                size="md"
+                initialActiveIndex={0}
+                frame
+                particleCount={8}
+                spread={28}
+                animationTime={520}
+                timeVariance={300}
+                gooeyness={0.5}
+                wobble={0.2}
+                hoverEffect
+              />
+            </div>
+          ) : null}
+
+        </header>
+
+        {selectedBook ? (
+          <div className="book-detail-backdrop" onClick={closeBookDetails}>
+            <div className="book-detail-modal" onClick={(event) => event.stopPropagation()}>
+              <div className="book-detail-header">
+                <div className="profile-modal-header-spacer" />
+                <button
+                  type="button"
+                  className="toolbar-clear-button"
+                  onClick={closeBookDetails}
+                  aria-label="Close book details"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="book-detail-content">
+                <div>
+                  <div className="book-detail-cover">
+                    <img src={selectedBook.imageUrl} alt={`${selectedBook.title} cover`} />
+                  </div>
+
+                  <div className="book-detail-links">
+                    <a href={selectedBook.link} target="_blank" rel="noreferrer" className="book-detail-link">
+                      <BookOpen size={16} strokeWidth={2.2} aria-hidden="true" />
+                      Goodreads
+                    </a>
+                    <button type="button" className="book-detail-link share-link" onClick={handleShareBookLink}>
+                      <Share2 size={16} strokeWidth={2.2} aria-hidden="true" />
+                      Share
+                    </button>
+                  </div>
+                </div>
+                <div className="book-detail-body">
+                  <h2>{selectedBook.title}</h2>
+                  <p className="book-detail-author">{selectedBook.author}</p>
+
+                  <div className="book-details">
+                    <div className="book-detail-grid">
+                      <div className="book-detail-metric">
+                        <span className="book-detail-label">An</span>
+                        <strong>{selectedBook.publishedYear || 'N/A'}</strong>
+                      </div>
+                      <div className="book-detail-metric">
+                        <span className="book-detail-label">Pagini</span>
+                        <strong>{selectedBook.pages ? selectedBook.pages.toLocaleString() : 'N/A'}</strong>
+                      </div>
+                    </div>
+                    <div className="book-detail-qr-box">
+                      {bookQrCodeDataUrl ? (
+                        <img src={bookQrCodeDataUrl} alt={`QR code for ${selectedBook.title}`} className="book-detail-qr-image" />
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="book-detail-grid">
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         ) : null}
 
-      </header>
-
-      {selectedBook ? (
-        <div className="book-detail-backdrop" onClick={closeBookDetails}>
-          <div className="book-detail-modal" onClick={(event) => event.stopPropagation()}>
-            <div className="book-detail-header">
-              <div className="profile-modal-header-spacer" />
-              <button
-                type="button"
-                className="toolbar-clear-button"
-                onClick={closeBookDetails}
-                aria-label="Close book details"
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="book-detail-content">
-              <div>
-                <div className="book-detail-cover">
-                  <img src={selectedBook.imageUrl} alt={`${selectedBook.title} cover`} />
-                </div>
-
-                <div className="book-detail-links">
-                  <a href={selectedBook.link} target="_blank" rel="noreferrer" className="book-detail-link">
-                    Goodreads
-                  </a>
-                  <button type="button" className="book-detail-link share-link" onClick={handleShareBookLink}>
-                    Share
-                  </button>
-                </div>
+        {showProfileModal ? (
+          <div className="profile-modal-backdrop" onClick={() => setShowProfileModal(false)}>
+            <div className="profile-modal" onClick={(event) => event.stopPropagation()}>
+              <div className="profile-modal-header">
+                <div className="profile-modal-header-spacer" />
+                <button
+                  type="button"
+                  className="toolbar-clear-button"
+                  onClick={() => setShowProfileModal(false)}
+                  aria-label="Close profile URL popup"
+                >
+                  ×
+                </button>
               </div>
-              <div className="book-detail-body">
-                <h2>{selectedBook.title}</h2>
-                <p className="book-detail-author">{selectedBook.author}</p>
 
-                <div className="book-details">
-                  <div className="book-detail-grid">
-                    <div className="book-detail-metric">
-                      <span className="book-detail-label">An</span>
-                      <strong>{selectedBook.publishedYear || 'N/A'}</strong>
-                    </div>
-                    <div className="book-detail-metric">
-                      <span className="book-detail-label">Pagini</span>
-                      <strong>{selectedBook.pages ? selectedBook.pages.toLocaleString() : 'N/A'}</strong>
-                    </div>
-                  </div>
-                  <div className="book-detail-qr-box">
-                    {bookQrCodeDataUrl ? (
-                      <img src={bookQrCodeDataUrl} alt={`QR code for ${selectedBook.title}`} className="book-detail-qr-image" />
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="book-detail-grid">
-                </div>
+              <div className="profile-modal-form">
+                <label htmlFor="profile-url-input" className="profile-modal-label">
+                  Introdu URL-ul profilului tău de Goodreads
+                </label>
+                <input
+                  id="profile-url-input"
+                  type="url"
+                  value={profileUrlInput}
+                  onChange={handleProfileUrlInput}
+                  placeholder="https://www.goodreads.com/user/show/18354013-alin-iordache"
+                  className="profile-modal-input"
+                />
               </div>
+
+              {generatedProfileUrl ? (
+                <div className="profile-url-result">
+                  <label htmlFor="profile-url-input" className="profile-modal-label">
+                    URL-ul tau pe 'Ce mai citim'
+                  </label>
+                  <div className="profile-url-field">
+                    <span>{generatedProfileUrl}</span>
+                  </div>
+
+                  {qrCodeDataUrl ? (
+                    <div className="profile-qr-wrapper">
+                      <img src={qrCodeDataUrl} alt="QR code for generated website URL" className="profile-qr-image" />
+                    </div>
+                  ) : null}
+
+                  <div className="profile-url-actions">
+                    <button type="button" className="profile-url-copy" onClick={handleCopyGeneratedUrl}>
+                      Copy
+                    </button>
+                    <button type="button" className="profile-url-go" onClick={handleGoToGeneratedUrl}>
+                      Go
+                    </button>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
-        </div>
-      ) : null}
+        ) : null}
 
-      {showProfileModal ? (
-        <div className="profile-modal-backdrop" onClick={() => setShowProfileModal(false)}>
-          <div className="profile-modal" onClick={(event) => event.stopPropagation()}>
-            <div className="profile-modal-header">
-              <div className="profile-modal-header-spacer" />
-              <button
-                type="button"
-                className="toolbar-clear-button"
-                onClick={() => setShowProfileModal(false)}
-                aria-label="Close profile URL popup"
-              >
-                ×
-              </button>
-            </div>
+        {error ? <div className="status-banner">{error}</div> : null}
 
-            <div className="profile-modal-form">
-              <label htmlFor="profile-url-input" className="profile-modal-label">
-                Introdu URL-ul profilului tău de Goodreads
-              </label>
-              <input
-                id="profile-url-input"
-                type="url"
-                value={profileUrlInput}
-                onChange={handleProfileUrlInput}
-                placeholder="https://www.goodreads.com/user/show/18354013-alin-iordache"
-                className="profile-modal-input"
+        {isLoading ? (
+          <div className="book-controls book-controls-placeholder" aria-hidden="true" />
+        ) : books.length > 0 ? (
+          <div className="book-controls" aria-label="Book controls">
+            <div className="toolbar-group">
+              <GlideSelect
+                options={glideAuthorOptions}
+                value={activeAuthorFilter}
+                onChange={(val) => setActiveAuthorFilter(val)}
+                ariaLabel="Selectează autorul"
+                showTags
+                accentColor="#c4b5fd"
+                surfaceColor="rgba(15, 23, 42, 0.85)"
+                highlightColor="rgba(139, 92, 246, 0.35)"
+                textColor="#f8fafc"
+                size="md"
+                align={isMobile ? 'left' : 'right'}
+                placement='bottom'
+                radius={16}
+                menuWidth={240}
+                icon={<UserSearch size={13} strokeWidth={2} />}
               />
             </div>
 
-            {generatedProfileUrl ? (
-              <div className="profile-url-result">
-                <label htmlFor="profile-url-input" className="profile-modal-label">
-                  URL-ul tau pe 'Ce mai citim'
-                </label>
-                <div className="profile-url-field">
-                  <span>{generatedProfileUrl}</span>
-                </div>
-
-                {qrCodeDataUrl ? (
-                  <div className="profile-qr-wrapper">
-                    <img src={qrCodeDataUrl} alt="QR code for generated website URL" className="profile-qr-image" />
-                  </div>
-                ) : null}
-
-                <div className="profile-url-actions">
-                  <button type="button" className="profile-url-copy" onClick={handleCopyGeneratedUrl}>
-                    Copy
-                  </button>
-                  <button type="button" className="profile-url-go" onClick={handleGoToGeneratedUrl}>
-                    Go
-                  </button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
-      {error ? <div className="status-banner">{error}</div> : null}
-
-      {isLoading ? (
-        <div className="book-controls book-controls-placeholder" aria-hidden="true" />
-      ) : books.length > 0 ? (
-        <div className="book-controls" aria-label="Book controls">
-          <div className="toolbar-group">
-            <select
-              id="book-author-select"
-              className="toolbar-select"
-              value={activeAuthorFilter}
-              onChange={(event) => setActiveAuthorFilter(event.target.value)}
-            >
-              <option value="all">Toti autorii</option>
-              {authorOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            {activeAuthorFilter !== 'all' ? (
-              <button
-                type="button"
-                className="toolbar-clear-button"
-                aria-label="Clear author filter"
-                onClick={() => setActiveAuthorFilter('all')}
-                title="Clear author filter"
-              >
-                ×
-              </button>
-            ) : null}
-          </div>
-
-          <div className="toolbar-group">
-            <select
-              id="book-sort-select"
-              className="toolbar-select"
-              value={activeBookSort}
-              onChange={(event) => setActiveBookSort(event.target.value)}
-            >
-              {availableBookSortOptions.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-      ) : null}
-
-      <section
-        className="carousel-panel"
-        aria-label="Book carousel"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-      >
-        {shouldShowCarouselNavigation ? (
-          <button
-            type="button"
-            className="nav-button"
-            onClick={() => scrollBooks(-1)}
-            aria-label="Scroll books left"
-          >
-            ←
-          </button>
-        ) : null}
-
-        {isLoading ? (
-          <div className="books-carousel loading-carousel" aria-live="polite" aria-label="Loading books">
-            {Array.from({ length: 5 }).map((_, index) => (
-              <div key={`loading-${index}`} className="book-card loading-card">
-                <div className="loading-cover" />
-                <div className="loading-text" />
-                <div className="loading-text short" />
-              </div>
-            ))}
-          </div>
-        ) : username && visibleBooks.length === 0 ? (
-          <div className="books-carousel empty-carousel" aria-live="polite" aria-label="Empty shelf">
-            <div className="empty-shelf-state">
-              <h2>Nu exista nimic pe acest raft.</h2>
+            <div className="toolbar-group">
+              <GlideSelect
+                options={glideSortOptions}
+                value={activeBookSort}
+                onChange={(val) => setActiveBookSort(val)}
+                ariaLabel="Sortează cărțile"
+                accentColor="#c4b5fd"
+                surfaceColor="rgba(15, 23, 42, 0.85)"
+                highlightColor="rgba(139, 92, 246, 0.35)"
+                textColor="#f8fafc"
+                size="md"
+                align={isMobile ? 'left' : 'right'}
+                radius={16}
+                menuWidth={160}
+                icon={<ArrowUpDown size={13} strokeWidth={2} />}
+              />
             </div>
           </div>
-        ) : (
-          <div className="books-carousel" ref={carouselRef}>
-            {visibleBooks.map((book) => (
-              <article key={book.id} className="book-card">
-                <div className="book-cover-surface" aria-hidden="true">
-                  <BookCover
-                    width={180}
-                    height={260}
-                    thickness={book.thickness}
-                    rotate={20}
-                    rotateHover={30}
-                    perspective={900}
-                    pagesOffset={4}
-                    bgColor="#0f172a"
-                    shadowColor="rgba(15, 23, 42, 0.45)"
-                  >
-                    <div className="book-cover-art">
-                      <img src={book.imageUrl} alt={`${book.title} cover`} />
-                    </div>
-                  </BookCover>
-                </div>
-
-                <div className="book-meta">
-                  <h2>
-                    {book.title}
-                  </h2>
-                  <p>{book.author}</p>
-                  {activeShelf === 'read' ? (
-                    <>
-                      <div className="book-rating" aria-label={`User rating: ${book.rating} out of 5`}>
-                        {renderStars(book.rating)}
-                      </div>
-                    </>
-                  ) : null}
-                  {book.averageRating ? (
-                    <div className="book-average-rating" aria-label={`Average Goodreads rating: ${book.averageRating}`}>
-                      <span style={{ marginRight: '4px' }} aria-hidden="true">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="bi bi-people-fill" viewBox="0 0 16 16">
-                          <path d="M7 14s-1 0-1-1 1-4 5-4 5 3 5 4-1 1-1 1zm4-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6m-5.784 6A2.24 2.24 0 0 1 5 13c0-1.355.68-2.75 1.936-3.72A6.3 6.3 0 0 0 5 9c-4 0-5 3-5 4s1 1 1 1zM4.5 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5" />
-                        </svg>
-                      </span>
-                      {book.averageRating.toFixed(2)}
-                    </div>
-                  ) : null}
-
-                  <div className="book-actions">
-                    <button
-                      type="button"
-                      className="book-preview-button"
-                      onPointerDown={(event) => event.stopPropagation()}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        openBookDetails(book)
-                      }}
-                      aria-label={`Open details for ${book.title}`}
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" strokeWidth={0.4} width="16" height="16" fill="currentColor" class="bi bi-eye" viewBox="0 0 16 16">
-                        <path d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8M1.173 8a13 13 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5s3.879 1.168 5.168 2.457A13 13 0 0 1 14.828 8q-.086.13-.195.288c-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5s-3.879-1.168-5.168-2.457A13 13 0 0 1 1.172 8z" />
-                        <path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5M4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0" />
-                      </svg>
-                    </button>
-
-                    <button
-                      type="button"
-                      className="book-preview-button book-share-button"
-                      onPointerDown={(event) => event.stopPropagation()}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        shareBookLink(book)
-                      }}
-                      aria-label={`Share link for ${book.title}`}
-                    >
-                      <svg fill="#ffffff" height="200px" width="200px" version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512" xml:space="preserve" transform="matrix(-1, 0, 0, 1, 0, 0)"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <g> <g> <path d="M384,153.6c-39.799,0-74.906,18.543-98.381,47.027l-138.812-92.535c4.284-9.583,6.793-20.122,6.793-31.292 C153.6,34.381,119.219,0,76.8,0C34.381,0,0,34.381,0,76.8c0,42.419,34.381,76.8,76.8,76.8c22.025,0,41.745-9.395,55.757-24.252 l138.854,92.578C261.897,239.821,256,259.925,256,281.6c0,14.362,2.901,27.93,7.262,40.815l-73.95,33.613 C171.273,326.835,139.247,307.2,102.4,307.2C45.85,307.2,0,353.05,0,409.6C0,466.15,45.85,512,102.4,512 c56.559,0,102.4-45.85,102.4-102.4c0-10.581-2.065-20.591-5.043-30.191l74.078-33.673C296.021,383.761,336.802,409.6,384,409.6 c70.69,0,128-57.31,128-128S454.69,153.6,384,153.6z M76.8,128c-28.228,0-51.2-22.972-51.2-51.2s22.972-51.2,51.2-51.2 S128,48.572,128,76.8S105.028,128,76.8,128z M102.4,486.4c-42.351,0-76.8-34.449-76.8-76.8s34.449-76.8,76.8-76.8 c42.351,0,76.8,34.449,76.8,76.8S144.751,486.4,102.4,486.4z M384,384c-56.465,0-102.4-45.935-102.4-102.4 c0-56.465,45.935-102.4,102.4-102.4c56.465,0,102.4,45.935,102.4,102.4C486.4,338.065,440.465,384,384,384z"></path> </g> </g> </g></svg>
-                    </button>
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
-
-        {shouldShowCarouselNavigation ? (
-          <button
-            type="button"
-            className="nav-button"
-            onClick={() => scrollBooks(1)}
-            aria-label="Scroll books right"
-          >
-            →
-          </button>
         ) : null}
 
-      </section>
-    </main>
+        <section
+          className="carousel-panel"
+          aria-label="Book carousel"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+        >
+          {shouldShowCarouselNavigation ? (
+            <button
+              type="button"
+              className="nav-button"
+              onClick={() => scrollBooks(-1)}
+              aria-label="Scroll books left"
+            >
+              ←
+            </button>
+          ) : null}
+
+          {isLoading ? (
+            <div className="books-carousel loading-carousel" aria-live="polite" aria-label="Loading books">
+              {Array.from({ length: 5 }).map((_, index) => (
+                <div key={`loading-${index}`} className="book-card loading-card">
+                  <div className="loading-cover" />
+                  <div className="loading-text" />
+                  <div className="loading-text short" />
+                </div>
+              ))}
+            </div>
+          ) : username && visibleBooks.length === 0 ? (
+            <div className="books-carousel empty-carousel" aria-live="polite" aria-label="Empty shelf">
+              <div className="empty-shelf-state">
+                <h2>Nu exista nimic pe acest raft.</h2>
+              </div>
+            </div>
+          ) : (
+            <div className="books-carousel" ref={carouselRef}>
+              {visibleBooks.map((book) => (
+                <article key={book.id} className="book-card">
+                  <div className="book-cover-surface" aria-hidden="true">
+                    <BookCover
+                      width={180}
+                      height={260}
+                      thickness={book.thickness}
+                      rotate={20}
+                      rotateHover={30}
+                      perspective={900}
+                      pagesOffset={4}
+                      bgColor="#0f172a"
+                      shadowColor="transparent"
+                    >
+                      <div className="book-cover-art">
+                        <img src={book.imageUrl} alt={`${book.title} cover`} />
+                      </div>
+                    </BookCover>
+                  </div>
+
+                  <div className="book-meta">
+                    <h2>
+                      {book.title}
+                    </h2>
+                    <p>{book.author}</p>
+                    {activeShelf === 'read' ? (
+                      <>
+                        <div className="book-rating" aria-label={`User rating: ${book.rating} out of 5`}>
+                          {renderStars(book.rating)}
+                        </div>
+                      </>
+                    ) : null}
+                    {book.averageRating ? (
+                      <div className="book-average-rating" aria-label={`Average Goodreads rating: ${book.averageRating}`}>
+                        <span style={{ marginRight: '4px' }} aria-hidden="true">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="bi bi-people-fill" viewBox="0 0 16 16">
+                            <path d="M7 14s-1 0-1-1 1-4 5-4 5 3 5 4-1 1-1 1zm4-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6m-5.784 6A2.24 2.24 0 0 1 5 13c0-1.355.68-2.75 1.936-3.72A6.3 6.3 0 0 0 5 9c-4 0-5 3-5 4s1 1 1 1zM4.5 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5" />
+                          </svg>
+                        </span>
+                        {book.averageRating.toFixed(2)}
+                      </div>
+                    ) : null}
+
+                    <div className="book-actions">
+                      <button
+                        type="button"
+                        className="book-preview-button"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          openBookDetails(book)
+                        }}
+                        aria-label={`Open details for ${book.title}`}
+                      >
+                        <SquareArrowOutUpRight size={16} strokeWidth={2} aria-hidden="true" />
+                      </button>
+
+                      <button
+                        type="button"
+                        className="book-preview-button book-share-button"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          shareBookLink(book)
+                        }}
+                        aria-label={`Share link for ${book.title}`}
+                      >
+                        <Share2 size={16} strokeWidth={2} aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+
+          {shouldShowCarouselNavigation ? (
+            <button
+              type="button"
+              className="nav-button"
+              onClick={() => scrollBooks(1)}
+              aria-label="Scroll books right"
+            >
+              →
+            </button>
+          ) : null}
+
+        </section>
+
+        <button
+          type="button"
+          className="profile-url-trigger"
+          onClick={() => setShowProfileModal(true)}
+        >
+          <WandSparkles size={16} strokeWidth={2} />
+          Generează URL-ul tău
+        </button>
+      </main>
+    </div>
   )
 }
 

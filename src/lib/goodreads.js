@@ -9,14 +9,20 @@ export const extractGoodreadsUserId = (value) => {
     return normalized
   }
 
+  const match = normalized.match(/goodreads\.com\/(?:user\/show\/)?(\d+)/i)
+  if (match?.[1]) {
+    return match[1]
+  }
+
   const pathOnly = normalized.replace(/^https?:\/\/[^/]+/i, '').replace(/^\/+|\/+$/g, '')
 
   if (/^\d+$/.test(pathOnly)) {
     return pathOnly
   }
 
-  const match = normalized.match(/goodreads\.com\/(?:user\/show\/)?(\d+)/i)
-  return match?.[1] || ''
+  const segments = pathOnly.split('/')
+  const firstNumeric = segments.find((segment) => /^\d+$/.test(segment))
+  return firstNumeric || ''
 }
 
 export const buildGoodreadsApiUrl = (value, shelf = 'read') => {
