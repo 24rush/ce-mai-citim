@@ -173,6 +173,8 @@ function App() {
   const carouselRef = useRef(null)
   const dragState = useRef({ active: false, startX: 0, scrollLeft: 0 })
   const rafIdRef = useRef(null)
+  const pointerDragRef = useRef({ startX: 0, startY: 0, hasMoved: false })
+  const lastScrollTimeRef = useRef(0)
 
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
 
@@ -547,6 +549,12 @@ function App() {
   }
 
   const handlePointerDown = (event) => {
+    pointerDragRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      hasMoved: false,
+    }
+
     if (!carouselRef.current) {
       return
     }
@@ -570,6 +578,12 @@ function App() {
   }
 
   const handlePointerMove = (event) => {
+    const deltaX = Math.abs(event.clientX - pointerDragRef.current.startX)
+    const deltaY = Math.abs(event.clientY - pointerDragRef.current.startY)
+    if (deltaX > 8 || deltaY > 8) {
+      pointerDragRef.current.hasMoved = true
+    }
+
     if (!dragState.current.active || !carouselRef.current || event.pointerType === 'touch') {
       return
     }
@@ -590,6 +604,16 @@ function App() {
     }
 
     dragState.current.active = false
+  }
+
+  const handleBookTap = (book) => {
+    if (pointerDragRef.current.hasMoved) {
+      return
+    }
+    if (Date.now() - lastScrollTimeRef.current < 150) {
+      return
+    }
+    openBookDetails(book)
   }
 
   const syncBookCoverFocus = () => {
@@ -637,7 +661,11 @@ function App() {
     const carousel = carouselRef.current
     syncBookCoverFocus()
 
-    const handleScroll = () => syncBookCoverFocus()
+    const handleScroll = () => {
+      lastScrollTimeRef.current = Date.now()
+      pointerDragRef.current.hasMoved = true
+      syncBookCoverFocus()
+    }
 
     carousel.addEventListener('scroll', handleScroll, { passive: true })
     window.addEventListener('resize', handleScroll)
@@ -939,7 +967,19 @@ function App() {
             <div className="books-carousel" ref={carouselRef}>
               {visibleBooks.map((book) => (
                 <article key={book.id} className="book-card">
-                  <div className="book-cover-surface" aria-hidden="true">
+                  <div
+                    className="book-cover-surface"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => handleBookTap(book)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        openBookDetails(book)
+                      }
+                    }}
+                    aria-label={`Deschide detaliile pentru ${book.title}`}
+                  >
                     <BookCover
                       width={180}
                       height={260}
@@ -958,7 +998,10 @@ function App() {
                   </div>
 
                   <div className="book-meta">
-                    <h2>
+                    <h2
+                      onClick={() => handleBookTap(book)}
+                      style={{ cursor: 'pointer' }}
+                    >
                       {book.title}
                     </h2>
                     <p>{book.author}</p>

@@ -609,10 +609,14 @@
 }
 
 .book-cover-surface {
-  pointer-events: none;
+  cursor: pointer;
   transform: scale(var(--card-scale));
   transform-origin: center bottom;
   will-change: transform;
+}
+
+.book-cover-surface * {
+  pointer-events: none;
 }
 
 .book-cover-surface .book::before {
