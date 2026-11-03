@@ -1,5 +1,12 @@
 {
+  "framework": "vite",
+  "devCommand": "vite --port $PORT",
   "rewrites": [
-    { "source": "/(.*)", "destination": "/" }
+    { "source": "/api/covers", "destination": "/api/cover" },
+    { "source": "/api/(.*)", "destination": "/api/$1" },
+    {
+      "source": "/((?!api/|@vite/|@react-refresh|@fs/|@id/|src/|node_modules/|assets/|.*\\..*).*)",
+      "destination": "/index.html"
+    }
   ]
 }

@@ -1,24 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import { BookCover } from 'book-cover-3d'
-import { ArrowUpDown, BookOpen, Share2, SquareArrowOutUpRight, UserSearch, WandSparkles } from 'lucide-react'
+import { ArrowUpDown, Share2, SquareArrowOutUpRight, Upload, UserRoundPen, UserSearch, WandSparkles } from 'lucide-react'
 import {
   buildBookShareUrl,
   buildGoodreadsApiUrl,
-  extractBookUrlFromDescription,
-  extractDescriptionMetadata,
   extractGoodreadsUserId,
   getFinishedBooksTotals,
+  getUserIdFromCookie,
+  matchesShelf,
+  normalizeCsvBook,
+  parseGoodreadsCsv,
+  setUserIdCookie,
 } from './lib/goodreads'
 import GradientASCII from './components/GradientASCII'
 import GooeyNav from './components/GooeyNav'
 import GlideSelect from './components/GlideSelect'
 import './App.css'
 
+const INITIAL_PULLED_IMAGES_COUNT = 10
+const IMAGES_PULL_AHEAD = 10
+
 const SHELF_OPTIONS = [
   { id: 'read', label: 'Citite', query: 'read' },
   { id: 'to-read', label: 'De citit', query: 'to-read' },
   { id: 'currently-reading', label: 'În curs', query: 'currently-reading' },
+  { id: 'did-not-finish', label: 'Abandonate', query: 'did-not-finish' },
 ]
 
 const BOOK_SORT_OPTIONS = [
@@ -45,7 +52,7 @@ const BOOK_SORT_OPTIONS = [
 ]
 
 const getBookSortOptions = (shelfId) => {
-  if (shelfId === 'to-read' || shelfId === 'currently-reading') {
+  if (shelfId === 'to-read' || shelfId === 'currently-reading' || shelfId === 'did-not-finish') {
     return BOOK_SORT_OPTIONS.filter((option) => option.id !== 'recently-read' && option.id !== 'best-rated')
   }
 
@@ -68,86 +75,44 @@ const getRouteStateFromPath = (pathname = window.location.pathname) => {
   }
 }
 
-export const parseRssBooks = (xmlText) => {
-  const parser = new DOMParser()
-  const xml = parser.parseFromString(xmlText, 'application/xml')
-  const parseError = xml.querySelector('parsererror')
-
-  if (parseError) {
-    throw new Error('Unable to parse Goodreads RSS feed.')
-  }
-
-  const items = [...xml.querySelectorAll('item')]
-  const username = items[0]?.querySelector('user_name')?.textContent?.trim() || ''
-
-  return {
-    username,
-    books: items
-      .map((item, index) => {
-        const bookNode = item.querySelector('book') || item
-
-        const title = item.querySelector('title')?.textContent?.trim() || `Book ${index + 1}`
-        const bookIdFromFeed = item.querySelector('book_id')?.textContent?.trim() || bookNode.querySelector('book_id')?.textContent?.trim() || ''
-
-        const descriptionText = item.querySelector('description')?.textContent || ''
-        const descriptionMeta = extractDescriptionMetadata(descriptionText)
-        const descriptionBookUrl = extractBookUrlFromDescription(item.querySelector('description')?.innerHTML || '')
-
-        const link = descriptionBookUrl ||
-          `https://www.goodreads.com/book/show/${bookIdFromFeed}` || '#'
-
-        const imageUrl =
-          bookNode.querySelector('book_large_image_url')?.textContent?.trim() ||
-          item.querySelector('book_large_image_url')?.textContent?.trim() ||
-          item.querySelector('book_medium_image_url')?.textContent?.trim() ||
-          item.querySelector('book_small_image_url')?.textContent?.trim() ||
-          'https://images-na.ssl-images-amazon.com/images/S/compressed.photo.goodreads.com/books/1545059380i/27833670.jpg'
-
-        const rawRating =
-          item.querySelector('user_rating')?.textContent?.trim() ||
-          descriptionMeta.rating ||
-          '0'
-
-        const rawPages = bookNode.querySelector('num_pages')?.textContent?.trim() || '0'
-        const readAt = descriptionMeta.readAt || ''
-        const finishedAt = descriptionMeta.finishedAt || readAt || ''
-        const averageRating = Number.parseFloat(descriptionMeta.averageRating || '0')
-
-        const publishedYear = Number.parseInt(descriptionMeta.publishedYear || '0', 10)
-
-        const rating = Number.parseFloat(rawRating)
-        const pages = Number.parseInt(rawPages, 10)
-        const thickness = Number.isFinite(pages) && pages > 0 ? Math.min(Math.max(Math.round(pages / 8), 18), 80) : 35
-
-        return {
-          id: bookIdFromFeed || `${title}-${index}`,
-          bookId: bookIdFromFeed || `${title}-${index}`,
-          title,
-          author: item.querySelector('author_name')?.textContent?.trim(),
-          imageUrl,
-          link,
-          rating: Number.isFinite(rating) ? Math.min(Math.max(rating, 0), 5) : 0,
-          thickness,
-          pages: Number.isFinite(pages) && pages > 0 ? pages : 0,
-          readAt,
-          finishedAt,
-          averageRating: Number.isFinite(averageRating) ? averageRating : 0,
-          publishedYear: Number.isFinite(publishedYear) ? publishedYear : 0,
-        }
-      })
-      .filter(Boolean),
-  }
-}
-
-const fetchBooksFromRss = async (rssUrl) => {
-  const response = await fetch(rssUrl)
+const fetchBooksFromApi = async (apiUrl, signal) => {
+  const response = await fetch(apiUrl, { signal })
 
   if (!response.ok) {
-    throw new Error(`RSS request failed with status ${response.status}`)
+    throw new Error(`API request failed with status ${response.status}`)
   }
 
-  const xmlText = await response.text()
-  return parseRssBooks(xmlText)
+  const contentType = response.headers.get('content-type') || ''
+  const responseText = await response.text()
+  const trimmedText = responseText.trim()
+
+  if (
+    contentType.includes('application/json') ||
+    trimmedText.startsWith('{') ||
+    trimmedText.startsWith('[')
+  ) {
+    const data = JSON.parse(trimmedText)
+    const username = data?.username || data?.displayName || ''
+
+    if (typeof data?.csv === 'string') {
+      const csvBooks = parseGoodreadsCsv(data.csv)
+      return { username, books: csvBooks }
+    }
+
+    const rawBooks = Array.isArray(data?.books) ? data.books : Array.isArray(data) ? data : []
+    const normalizedBooks = rawBooks.map((book, index) => normalizeCsvBook(book, index))
+
+    return {
+      username,
+      books: normalizedBooks,
+    }
+  }
+
+  const csvBooks = parseGoodreadsCsv(responseText)
+  return {
+    username: '',
+    books: csvBooks,
+  }
 }
 
 const DEFAULT_USER_ID = '18354013'
@@ -159,22 +124,33 @@ function App() {
   const [activeShelf, setActiveShelf] = useState(() => initialRouteState.shelf || 'read')
   const [activeAuthorFilter, setActiveAuthorFilter] = useState('all')
   const [activeBookSort, setActiveBookSort] = useState('recently-read')
-  const [currentUserId, setCurrentUserId] = useState(() => initialRouteState.userId || DEFAULT_USER_ID)
+  const [currentUserId, setCurrentUserId] = useState(
+    () => initialRouteState.userId || getUserIdFromCookie() || DEFAULT_USER_ID,
+  )
+  const [cookieUserId, setCookieUserId] = useState(() => getUserIdFromCookie())
+  const [generateNewUser, setGenerateNewUser] = useState(false)
   const [showProfileModal, setShowProfileModal] = useState(false)
-  const [profileUrlInput, setProfileUrlInput] = useState('')
+  const [displayNameInput, setDisplayNameInput] = useState('')
+  const [csvFile, setCsvFile] = useState(null)
+  const [isUploadingCsv, setIsUploadingCsv] = useState(false)
+  const [uploadError, setUploadError] = useState('')
   const [generatedProfileUrl, setGeneratedProfileUrl] = useState('')
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('')
+  const [copiedUrl, setCopiedUrl] = useState(false)
   const [bookQrCodeDataUrl, setBookQrCodeDataUrl] = useState('')
   const [requestedBookId, setRequestedBookId] = useState(() => initialRouteState.bookId || '')
   const [selectedBook, setSelectedBook] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const availableBookSortOptions = useMemo(() => getBookSortOptions(activeShelf), [activeShelf])
   const [error, setError] = useState('')
+  const [pulledImagesCount, setPulledImagesCount] = useState(INITIAL_PULLED_IMAGES_COUNT)
   const carouselRef = useRef(null)
   const dragState = useRef({ active: false, startX: 0, scrollLeft: 0 })
   const rafIdRef = useRef(null)
   const pointerDragRef = useRef({ startX: 0, startY: 0, hasMoved: false })
   const lastScrollTimeRef = useRef(0)
+  const syncedCoversRef = useRef(new Set())
+  const nameInputRef = useRef(null)
 
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
 
@@ -186,7 +162,8 @@ function App() {
 
   useEffect(() => {
     if (window.location.pathname === '/' || window.location.pathname === '') {
-      window.history.replaceState({}, '', `/${DEFAULT_USER_ID}`)
+      const initialId = getUserIdFromCookie() || DEFAULT_USER_ID
+      window.history.replaceState({}, '', `/${initialId}`)
     }
   }, [])
 
@@ -209,26 +186,26 @@ function App() {
   }, [])
 
   useEffect(() => {
-    let isCancelled = false
+    const controller = new AbortController()
     const resolvedUserId = currentUserId || DEFAULT_USER_ID
-    const shelfUrl = buildGoodreadsApiUrl(resolvedUserId, activeShelf)
+    const apiUrl = buildGoodreadsApiUrl(resolvedUserId)
 
     const loadBooks = async () => {
       try {
         setIsLoading(true)
         setError('')
-        const { books: rssBooks, username: rssUsername } = await fetchBooksFromRss(shelfUrl)
-        if (isCancelled) return
-        setBooks(rssBooks)
-        if (rssUsername) {
-          setUsername(rssUsername)
+        const { books: apiBooks, username: apiUsername } = await fetchBooksFromApi(apiUrl, controller.signal)
+        setBooks(apiBooks)
+        if (apiUsername) {
+          setUsername(apiUsername)
+          setDisplayNameInput((prev) => prev || apiUsername)
         }
       } catch (loadError) {
-        if (isCancelled) return
+        if (controller.signal.aborted) return
         console.error(loadError)
         setError('Ups! Nu am găsit nimic la această adresă.')
       } finally {
-        if (!isCancelled) {
+        if (!controller.signal.aborted) {
           setIsLoading(false)
         }
       }
@@ -237,9 +214,9 @@ function App() {
     loadBooks()
 
     return () => {
-      isCancelled = true
+      controller.abort()
     }
-  }, [activeShelf, currentUserId])
+  }, [currentUserId])
 
   useEffect(() => {
     const defaultSortForShelf = activeShelf === 'read' ? 'recently-read' : (availableBookSortOptions[0]?.id || 'newest')
@@ -287,10 +264,14 @@ function App() {
       .catch(() => setBookQrCodeDataUrl(''))
   }, [selectedBook?.link])
 
+  const shelfBooks = useMemo(() => {
+    return books.filter((book) => matchesShelf(book, activeShelf))
+  }, [books, activeShelf])
+
   const authorOptions = useMemo(() => {
     const counts = new Map()
 
-    books.forEach((book) => {
+    shelfBooks.forEach((book) => {
       if (!book.author) {
         return
       }
@@ -312,12 +293,12 @@ function App() {
         label: author,
         tag: String(count),
       }))
-  }, [books])
+  }, [shelfBooks])
 
   const glideAuthorOptions = useMemo(() => [
-    { value: 'all', label: 'Toti autorii', tag: String(books.length) },
+    { value: 'all', label: 'Toti autorii', tag: String(shelfBooks.length) },
     ...authorOptions,
-  ], [books.length, authorOptions])
+  ], [shelfBooks.length, authorOptions])
 
   const glideSortOptions = useMemo(() => (
     availableBookSortOptions.map((option) => ({
@@ -334,11 +315,11 @@ function App() {
 
   const filteredBooks = useMemo(() => {
     if (activeAuthorFilter === 'all') {
-      return books
+      return shelfBooks
     }
 
-    return books.filter((book) => book.author === activeAuthorFilter)
-  }, [activeAuthorFilter, books])
+    return shelfBooks.filter((book) => book.author === activeAuthorFilter)
+  }, [activeAuthorFilter, shelfBooks])
 
   const activeSort = availableBookSortOptions.find((option) => option.id === activeBookSort) || availableBookSortOptions[0]
   const yearlySummary = useMemo(() => getFinishedBooksTotals(books, 2026), [books])
@@ -375,6 +356,123 @@ function App() {
       behavior: 'auto',
     })
   }, [activeShelf, visibleBooks.length])
+
+  useEffect(() => {
+    setPulledImagesCount(INITIAL_PULLED_IMAGES_COUNT)
+  }, [activeShelf, activeAuthorFilter, activeBookSort])
+
+  useEffect(() => {
+    if (!visibleBooks.length) return
+
+    const candidateBooks = visibleBooks.slice(0, pulledImagesCount)
+
+    const booksToSync = candidateBooks.filter((b) => {
+      const cleanIsbn = String(b.isbn || '').replace(/[^0-9X]/gi, '').trim()
+      return (
+        cleanIsbn.length >= 8 &&
+        b.imageUrl &&
+        b.imageUrl.includes('openlibrary.org') &&
+        !syncedCoversRef.current.has(cleanIsbn)
+      )
+    })
+
+    if (!booksToSync.length) return
+
+    let isCancelled = false
+
+    const syncCovers = async () => {
+      for (const book of booksToSync) {
+        if (isCancelled) break
+        const cleanIsbn = String(book.isbn || '').replace(/[^0-9X]/gi, '').trim()
+        syncedCoversRef.current.add(cleanIsbn)
+
+        const candidateUrls = [
+          cleanIsbn ? `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-L.jpg` : null,
+          book.imageUrl && !book.imageUrl.includes('goodreads.com') && !book.imageUrl.includes('ssl-images-amazon.com')
+            ? book.imageUrl
+            : null,
+        ].filter(Boolean)
+
+        let loadedBlob = null
+
+        for (const testUrl of candidateUrls) {
+          try {
+            const imgRes = await fetch(testUrl)
+            if (!imgRes.ok) continue
+
+            const blob = await imgRes.blob()
+            // OpenLibrary returns 1x1 gif (< 1000 bytes) if image is missing
+            if (blob.size < 1000 && blob.type.includes('gif')) continue
+            if (blob.size === 0 || blob.type.includes('html')) continue
+
+            loadedBlob = blob
+            break
+          } catch {
+            // Try next candidate url
+          }
+        }
+
+        if (!loadedBlob) continue
+
+        // Immediately display the loaded cover on the book
+        const localCoverUrl = URL.createObjectURL(loadedBlob)
+        if (!isCancelled) {
+          setBooks((prev) =>
+            prev.map((b) => (b.isbn === book.isbn ? { ...b, imageUrl: localCoverUrl } : b)),
+          )
+          setSelectedBook((prev) =>
+            prev && prev.isbn === book.isbn ? { ...prev, imageUrl: localCoverUrl } : prev,
+          )
+        }
+
+        try {
+          const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onloadend = () => resolve(reader.result)
+            reader.onerror = reject
+            reader.readAsDataURL(loadedBlob)
+          })
+
+          const uploadRes = await fetch(`/api/cover?isbn=${encodeURIComponent(cleanIsbn)}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              isbn: cleanIsbn,
+              dataUrl,
+            }),
+          })
+
+          if (uploadRes.ok) {
+            const data = await uploadRes.json()
+            if (data?.url && !isCancelled) {
+              setBooks((prev) =>
+                prev.map((b) => (b.isbn === book.isbn ? { ...b, imageUrl: data.url } : b)),
+              )
+              setSelectedBook((prev) =>
+                prev && prev.isbn === book.isbn ? { ...prev, imageUrl: data.url } : prev,
+              )
+              URL.revokeObjectURL(localCoverUrl)
+            }
+          } else {
+            const errorText = await uploadRes.text()
+            console.warn('Cover upload failed:', errorText)
+          }
+        } catch (err) {
+          console.warn('Failed to persist cover to server:', book.title, err)
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      }
+    }
+
+    syncCovers()
+
+    return () => {
+      isCancelled = true
+    }
+  }, [visibleBooks, pulledImagesCount])
 
   const renderStars = (rating) => {
     const filledStars = Math.round(rating || 0)
@@ -446,65 +544,118 @@ function App() {
 
   const shouldShowCarouselNavigation = Boolean(currentUserId || username)
 
-  const handleShareBookLink = async () => {
-    if (!selectedBook || !currentUserId) {
+  const handleCsvFileChange = (event) => {
+    const file = event.target.files?.[0] || null
+    setCsvFile(file)
+    setUploadError('')
+  }
+
+  const handleUploadCsvSubmit = async (event) => {
+    event.preventDefault()
+
+    const trimmedName = displayNameInput.trim()
+    if (!trimmedName) {
+      setUploadError('Introdu numele care va fi afișat.')
       return
     }
 
-    const bookId = String(selectedBook.bookId || selectedBook.id)
-    const shareUrl = buildBookShareUrl(currentUserId, activeShelf, bookId, window.location.origin)
-
-    if (!shareUrl) {
+    if (!csvFile) {
+      setUploadError('Selectează fișierul CSV exportat din Goodreads.')
       return
     }
 
     try {
-      if (navigator.share) {
-        await navigator.share({
-          title: selectedBook.title,
-          text: `Vezi cartea: ${selectedBook.title}`,
-          url: shareUrl,
+      setIsUploadingCsv(true)
+      setUploadError('')
+      setError('')
+
+      const csvText = await csvFile.text()
+      const existingCookieUserId = generateNewUser ? undefined : (getUserIdFromCookie() || cookieUserId)
+      const isExistingUser = Boolean(existingCookieUserId && !generateNewUser)
+
+      const response = await fetch('/api/uploadcsv', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          displayName: trimmedName,
+          csv: csvText,
+          userId: existingCookieUserId || undefined,
+          isNewUser: generateNewUser,
+        }),
+        credentials: 'include',
+      })
+
+      if (!response.ok) {
+        throw new Error(`Upload CSV failed with status ${response.status}`)
+      }
+
+      const contentType = response.headers.get('content-type') || ''
+      let data = null
+      if (contentType.includes('application/json')) {
+        data = await response.json()
+      } else {
+        const text = (await response.text()).trim()
+        if (text) {
+          try {
+            data = JSON.parse(text)
+          } catch {
+            data = { userId: text }
+          }
+        }
+      }
+
+      const nextUserId = data?.userId || data?.id || data?.slug || ''
+      const nextUrl =
+        data?.url ||
+        (nextUserId
+          ? `${window.location.origin}/${nextUserId}`
+          : `${window.location.origin}/${encodeURIComponent(trimmedName)}`)
+
+      if (nextUserId) {
+        setUserIdCookie(nextUserId)
+        setCookieUserId(String(nextUserId))
+        const nextPath = `/${nextUserId}`
+        window.history.pushState({}, '', nextPath)
+        setCurrentUserId(String(nextUserId))
+      }
+
+      if (data?.username || trimmedName) {
+        setUsername(data?.username || trimmedName)
+      }
+
+      setGenerateNewUser(false)
+
+      if (Array.isArray(data?.books)) {
+        setBooks(data.books.map((book, index) => normalizeCsvBook(book, index)))
+      }
+
+      setGeneratedProfileUrl(nextUrl)
+
+      QRCode.toDataURL(nextUrl)
+        .then((dataUrl) => setQrCodeDataUrl(dataUrl))
+        .catch((qrError) => {
+          console.error(qrError)
+          setQrCodeDataUrl('')
         })
+
+      if (isExistingUser) {
+        setShowProfileModal(false)
+        setCsvFile(null)
+        if (window.location.pathname === '/' || window.location.pathname === '') {
+          window.location.href = `/${nextUserId}`
+        } else {
+          window.location.reload()
+        }
         return
       }
-
-      await navigator.clipboard.writeText(shareUrl)
-    } catch (shareError) {
-      console.error(shareError)
-      try {
-        await navigator.clipboard.writeText(shareUrl)
-      } catch (copyError) {
-        console.error(copyError)
-      }
+    } catch (submitError) {
+      console.error(submitError)
+      setUploadError('Nu am putut încărca fișierul CSV. Încearcă din nou.')
+    } finally {
+      setIsUploadingCsv(false)
     }
-  }
-
-  const handleProfileUrlInput = (event) => {
-    const nextValue = event.target.value
-    setProfileUrlInput(nextValue)
-
-    const userId = extractGoodreadsUserId(nextValue)
-
-    if (!userId) {
-      setGeneratedProfileUrl('')
-      setQrCodeDataUrl('')
-      setError('URL-ul nu pare să fie valid. Folosește un URL de tipul: https://www.goodreads.com/user/show/{user_id}-{username}')
-      return
-    }
-
-    const nextPath = `/${userId}`
-    const nextUrl = `${window.location.origin}${nextPath}`
-    window.history.pushState({}, '', nextPath)
-    setGeneratedProfileUrl(nextUrl)
-    setCurrentUserId(userId)
-    setError('')
-
-    QRCode.toDataURL(nextUrl)
-      .then((dataUrl) => setQrCodeDataUrl(dataUrl))
-      .catch((qrError) => {
-        console.error(qrError)
-        setQrCodeDataUrl('')
-      })
   }
 
   const handleCopyGeneratedUrl = async () => {
@@ -514,9 +665,35 @@ function App() {
 
     try {
       await navigator.clipboard.writeText(generatedProfileUrl)
+      setCopiedUrl(true)
+      setTimeout(() => setCopiedUrl(false), 2000)
     } catch (copyError) {
       console.error(copyError)
     }
+  }
+
+  const handleOpenProfileModal = () => {
+    const activeCookieId = getUserIdFromCookie() || cookieUserId
+    setGenerateNewUser(false)
+    if (activeCookieId) {
+      if (!cookieUserId) {
+        setCookieUserId(activeCookieId)
+      }
+      const prefillName = displayNameInput || username || ''
+      if (prefillName) {
+        setDisplayNameInput(prefillName)
+      }
+      const profileUrl = `${window.location.origin}/${activeCookieId}`
+      setGeneratedProfileUrl(profileUrl)
+      QRCode.toDataURL(profileUrl)
+        .then((dataUrl) => setQrCodeDataUrl(dataUrl))
+        .catch((qrError) => {
+          console.error(qrError)
+          setQrCodeDataUrl('')
+        })
+    }
+    setUploadError('')
+    setShowProfileModal(true)
   }
 
   const handleGoToGeneratedUrl = () => {
@@ -661,10 +838,33 @@ function App() {
     const carousel = carouselRef.current
     syncBookCoverFocus()
 
+    const updatePulledCount = () => {
+      if (!carouselRef.current) return
+      const carouselEl = carouselRef.current
+      const carouselRect = carouselEl.getBoundingClientRect()
+      const cards = carouselEl.querySelectorAll('.book-card')
+      let lastVisibleIndex = 0
+
+      for (let i = 0; i < cards.length; i += 1) {
+        const rect = cards[i].getBoundingClientRect()
+        if (rect.left < carouselRect.right) {
+          lastVisibleIndex = i
+        } else {
+          break
+        }
+      }
+
+      const neededCount = Math.max(INITIAL_PULLED_IMAGES_COUNT, lastVisibleIndex + 1 + IMAGES_PULL_AHEAD)
+      setPulledImagesCount((prev) => (neededCount > prev ? neededCount : prev))
+    }
+
+    updatePulledCount()
+
     const handleScroll = () => {
       lastScrollTimeRef.current = Date.now()
       pointerDragRef.current.hasMoved = true
       syncBookCoverFocus()
+      updatePulledCount()
     }
 
     carousel.addEventListener('scroll', handleScroll, { passive: true })
@@ -780,18 +980,16 @@ function App() {
               <div className="book-detail-content">
                 <div>
                   <div className="book-detail-cover">
-                    <img src={selectedBook.imageUrl} alt={`${selectedBook.title} cover`} />
-                  </div>
-
-                  <div className="book-detail-links">
-                    <a href={selectedBook.link} target="_blank" rel="noreferrer" className="book-detail-link">
-                      <BookOpen size={16} strokeWidth={2.2} aria-hidden="true" />
-                      Goodreads
-                    </a>
-                    <button type="button" className="book-detail-link share-link" onClick={handleShareBookLink}>
-                      <Share2 size={16} strokeWidth={2.2} aria-hidden="true" />
-                      Share
-                    </button>
+                    <img
+                      src={
+                        selectedBook.imageUrl && !selectedBook.imageUrl.includes('goodreads.com') && !selectedBook.imageUrl.includes('ssl-images-amazon.com')
+                          ? selectedBook.imageUrl
+                          : selectedBook.isbn
+                            ? `https://covers.openlibrary.org/b/isbn/${String(selectedBook.isbn).replace(/[^0-9X]/gi, '').trim()}-L.jpg`
+                            : ''
+                      }
+                      alt={`${selectedBook.title} cover`}
+                    />
                   </div>
                 </div>
                 <div className="book-detail-body">
@@ -839,23 +1037,87 @@ function App() {
                 </button>
               </div>
 
-              <div className="profile-modal-form">
-                <label htmlFor="profile-url-input" className="profile-modal-label">
-                  Introdu URL-ul profilului tău de Goodreads
-                </label>
-                <input
-                  id="profile-url-input"
-                  type="url"
-                  value={profileUrlInput}
-                  onChange={handleProfileUrlInput}
-                  placeholder="https://www.goodreads.com/user/show/18354013-alin-iordache"
-                  className="profile-modal-input"
-                />
-              </div>
+              <form className="profile-modal-form" onSubmit={handleUploadCsvSubmit}>
+                <div className="profile-modal-field">
+                  <label htmlFor="profile-display-name-input" className="profile-modal-label">
+                    Numele afișat *
+                  </label>
+                  <input
+                    ref={nameInputRef}
+                    id="profile-display-name-input"
+                    type="text"
+                    required
+                    aria-required="true"
+                    pattern=".*\S.*"
+                    value={displayNameInput}
+                    onChange={(event) => {
+                      setDisplayNameInput(event.target.value)
+                      setUploadError('')
+                    }}
+                    placeholder="ex: Alin"
+                    className="profile-modal-input"
+                  />
+                </div>
 
-              {generatedProfileUrl ? (
+                <div className="profile-modal-field">
+                  <label htmlFor="profile-csv-input" className="profile-modal-label">
+                    Fișier CSV Goodreads
+                  </label>
+                  <label htmlFor="profile-csv-input" className="profile-file-upload">
+                    <Upload size={16} strokeWidth={2} aria-hidden="true" />
+                    <span className="profile-file-upload-text">
+                      {csvFile ? csvFile.name : 'Încarcă fișierul CSV exportat...'}
+                    </span>
+                  </label>
+                  <input
+                    id="profile-csv-input"
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={handleCsvFileChange}
+                    className="profile-file-input-hidden"
+                  />
+                </div>
+
+                {cookieUserId ? (
+                  <div className="profile-modal-checkbox-row">
+                    <label className="profile-modal-checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={generateNewUser}
+                        onChange={(event) => {
+                          const isChecked = event.target.checked
+                          setGenerateNewUser(isChecked)
+                          if (isChecked) {
+                            setDisplayNameInput('')
+                            setTimeout(() => nameInputRef.current?.focus(), 50)
+                          } else {
+                            setDisplayNameInput(username || '')
+                          }
+                          setUploadError('')
+                        }}
+                        className="profile-modal-checkbox"
+                      />
+                      <span>Generează utilizator / URL nou</span>
+                    </label>
+                  </div>
+                ) : null}
+
+                {uploadError ? <p className="profile-modal-error">{uploadError}</p> : null}
+
+                <button
+                  type="submit"
+                  className="profile-modal-submit"
+                  disabled={isUploadingCsv || !displayNameInput.trim() || !csvFile}
+                >
+                  {isUploadingCsv
+                    ? 'Se încarcă...'
+                    : (cookieUserId && !generateNewUser ? 'Actualizează librăria' : 'Generează URL')}
+                </button>
+              </form>
+
+              {!generateNewUser && generatedProfileUrl ? (
                 <div className="profile-url-result">
-                  <label htmlFor="profile-url-input" className="profile-modal-label">
+                  <label className="profile-modal-label">
                     URL-ul tau pe 'Ce mai citim'
                   </label>
                   <div className="profile-url-field">
@@ -870,7 +1132,7 @@ function App() {
 
                   <div className="profile-url-actions">
                     <button type="button" className="profile-url-copy" onClick={handleCopyGeneratedUrl}>
-                      Copy
+                      {copiedUrl ? 'Copiat!' : 'Copy'}
                     </button>
                     <button type="button" className="profile-url-go" onClick={handleGoToGeneratedUrl}>
                       Go
@@ -965,94 +1227,113 @@ function App() {
             </div>
           ) : (
             <div className="books-carousel" ref={carouselRef}>
-              {visibleBooks.map((book) => (
-                <article key={book.id} className="book-card">
-                  <div
-                    className="book-cover-surface"
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => handleBookTap(book)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault()
-                        openBookDetails(book)
-                      }
-                    }}
-                    aria-label={`Deschide detaliile pentru ${book.title}`}
-                  >
-                    <BookCover
-                      width={180}
-                      height={260}
-                      thickness={book.thickness}
-                      rotate={20}
-                      rotateHover={30}
-                      perspective={900}
-                      pagesOffset={4}
-                      bgColor="#0f172a"
-                      shadowColor="transparent"
-                    >
-                      <div className="book-cover-art">
-                        <img src={book.imageUrl} alt={`${book.title} cover`} />
-                      </div>
-                    </BookCover>
-                  </div>
+              {visibleBooks.map((book, index) => {
+                const isCoverPulled =
+                  index < pulledImagesCount ||
+                  (!book.imageUrl?.includes('openlibrary.org') &&
+                    !book.imageUrl?.includes('goodreads.com') &&
+                    !book.imageUrl?.includes('ssl-images-amazon.com'))
 
-                  <div className="book-meta">
-                    <h2
+                const safeCoverUrl =
+                  book.imageUrl && !book.imageUrl.includes('goodreads.com') && !book.imageUrl.includes('ssl-images-amazon.com')
+                    ? book.imageUrl
+                    : book.isbn
+                      ? `https://covers.openlibrary.org/b/isbn/${String(book.isbn).replace(/[^0-9X]/gi, '').trim()}-L.jpg`
+                      : ''
+
+                return (
+                  <article key={book.id} className="book-card">
+                    <div
+                      className="book-cover-surface"
+                      role="button"
+                      tabIndex={0}
                       onClick={() => handleBookTap(book)}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      {book.title}
-                    </h2>
-                    <p>{book.author}</p>
-                    {activeShelf === 'read' ? (
-                      <>
-                        <div className="book-rating" aria-label={`User rating: ${book.rating} out of 5`}>
-                          {renderStars(book.rating)}
-                        </div>
-                      </>
-                    ) : null}
-                    {book.averageRating ? (
-                      <div className="book-average-rating" aria-label={`Average Goodreads rating: ${book.averageRating}`}>
-                        <span style={{ marginRight: '4px' }} aria-hidden="true">
-                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="bi bi-people-fill" viewBox="0 0 16 16">
-                            <path d="M7 14s-1 0-1-1 1-4 5-4 5 3 5 4-1 1-1 1zm4-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6m-5.784 6A2.24 2.24 0 0 1 5 13c0-1.355.68-2.75 1.936-3.72A6.3 6.3 0 0 0 5 9c-4 0-5 3-5 4s1 1 1 1zM4.5 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5" />
-                          </svg>
-                        </span>
-                        {book.averageRating.toFixed(2)}
-                      </div>
-                    ) : null}
-
-                    <div className="book-actions">
-                      <button
-                        type="button"
-                        className="book-preview-button"
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.stopPropagation()
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
                           openBookDetails(book)
-                        }}
-                        aria-label={`Open details for ${book.title}`}
+                        }
+                      }}
+                      aria-label={`Deschide detaliile pentru ${book.title}`}
+                    >
+                      <BookCover
+                        width={180}
+                        height={260}
+                        thickness={book.thickness}
+                        rotate={20}
+                        rotateHover={30}
+                        perspective={900}
+                        pagesOffset={4}
+                        bgColor="#0f172a"
+                        shadowColor="transparent"
                       >
-                        <SquareArrowOutUpRight size={16} strokeWidth={2} aria-hidden="true" />
-                      </button>
-
-                      <button
-                        type="button"
-                        className="book-preview-button book-share-button"
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          shareBookLink(book)
-                        }}
-                        aria-label={`Share link for ${book.title}`}
-                      >
-                        <Share2 size={16} strokeWidth={2} aria-hidden="true" />
-                      </button>
+                        <div className="book-cover-art">
+                          {isCoverPulled && safeCoverUrl ? (
+                            <img src={safeCoverUrl} alt={`${book.title} cover`} loading="lazy" />
+                          ) : (
+                            <div className="book-cover-placeholder" aria-hidden="true" />
+                          )}
+                        </div>
+                      </BookCover>
                     </div>
-                  </div>
-                </article>
-              ))}
+
+                    <div className="book-meta">
+                      <h2
+                        onClick={() => handleBookTap(book)}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        {book.title}
+                      </h2>
+                      <p>{book.author}</p>
+                      {activeShelf === 'read' ? (
+                        <>
+                          <div className="book-rating" aria-label={`User rating: ${book.rating} out of 5`}>
+                            {renderStars(book.rating)}
+                          </div>
+                        </>
+                      ) : null}
+                      {book.averageRating ? (
+                        <div className="book-average-rating" aria-label={`Average Goodreads rating: ${book.averageRating}`}>
+                          <span style={{ marginRight: '4px' }} aria-hidden="true">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="bi bi-people-fill" viewBox="0 0 16 16">
+                              <path d="M7 14s-1 0-1-1 1-4 5-4 5 3 5 4-1 1-1 1zm4-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6m-5.784 6A2.24 2.24 0 0 1 5 13c0-1.355.68-2.75 1.936-3.72A6.3 6.3 0 0 0 5 9c-4 0-5 3-5 4s1 1 1 1zM4.5 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5" />
+                            </svg>
+                          </span>
+                          {book.averageRating.toFixed(2)}
+                        </div>
+                      ) : null}
+
+                      <div className="book-actions">
+                        <button
+                          type="button"
+                          className="book-preview-button"
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            openBookDetails(book)
+                          }}
+                          aria-label={`Open details for ${book.title}`}
+                        >
+                          <SquareArrowOutUpRight size={16} strokeWidth={2} aria-hidden="true" />
+                        </button>
+
+                        <button
+                          type="button"
+                          className="book-preview-button book-share-button"
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            shareBookLink(book)
+                          }}
+                          aria-label={`Share link for ${book.title}`}
+                        >
+                          <Share2 size={16} strokeWidth={2} aria-hidden="true" />
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                )
+              })}
             </div>
           )}
 
@@ -1069,14 +1350,26 @@ function App() {
 
         </section>
 
-        <button
-          type="button"
-          className="profile-url-trigger"
-          onClick={() => setShowProfileModal(true)}
-        >
-          <WandSparkles size={16} strokeWidth={2} />
-          Generează URL-ul tău
-        </button>
+        {cookieUserId ? (
+          <button
+            type="button"
+            className="profile-url-trigger-round"
+            onClick={handleOpenProfileModal}
+            aria-label="Profil și încărcare CSV"
+            title="Profil și încărcare CSV"
+          >
+            <UserRoundPen size={18} strokeWidth={2.2} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="profile-url-trigger"
+            onClick={handleOpenProfileModal}
+          >
+            <WandSparkles size={16} strokeWidth={2} />
+            Generează URL-ul tău
+          </button>
+        )}
       </main>
     </div>
   )

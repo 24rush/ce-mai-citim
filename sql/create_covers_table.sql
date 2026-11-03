@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS covers (
+  isbn VARCHAR(32) PRIMARY KEY,
+  url TEXT NOT NULL
+);
+
