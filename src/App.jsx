@@ -1132,10 +1132,10 @@ function App() {
 
                   <div className="profile-url-actions">
                     <button type="button" className="profile-url-copy" onClick={handleCopyGeneratedUrl}>
-                      {copiedUrl ? 'Copiat!' : 'Copy'}
+                      {copiedUrl ? 'Copiat!' : 'Copiaza'}
                     </button>
                     <button type="button" className="profile-url-go" onClick={handleGoToGeneratedUrl}>
-                      Go
+                      Mergi la profilul tau
                     </button>
                   </div>
                 </div>

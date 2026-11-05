@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import { createDefaultDbQuery } from './_lib/db.js'
+import { getGoogleBooksApiKey, searchGoogleBooks, upsertCoverInDb } from './isbn.js'
 import {
   USER_ID_COOKIE_NAME,
   cleanCsvValue,
@@ -196,6 +197,20 @@ export const parseCsvForDatabase = (csvText = '') => {
       dbRow[col.dbColumn] = coerceColumnValue(rawCell, col.type)
     }
 
+    if (!dbRow.isbn) {
+      const isbn13ColIndex =
+        headerIndexMap.get('isbn13') ??
+        headerIndexMap.get('isbn 13') ??
+        headerIndexMap.get('isbn_13')
+      if (isbn13ColIndex !== undefined) {
+        const cleanedIsbn13 = cleanCsvValue(cells[isbn13ColIndex] ?? '')
+        if (cleanedIsbn13) {
+          dbRow.isbn = cleanedIsbn13
+          rawRecord['ISBN'] = cleanedIsbn13
+        }
+      }
+    }
+
     if (!dbRow.book_id && !dbRow.title) {
       return
     }
@@ -305,6 +320,80 @@ export const insertBooksIntoDatabase = async ({ userId, dbRows, queryFn }) => {
 
   await executeQuery(sqlText, values)
   return dbRows.length
+}
+
+export const enrichMissingIsbns = async ({
+  dbRows = [],
+  books = [],
+  apiKey = getGoogleBooksApiKey(),
+  fetchFn = fetch,
+  queryFn,
+} = {}) => {
+  if (!dbRows.length) {
+    return { dbRows, books }
+  }
+
+  const targets = []
+  dbRows.forEach((row, index) => {
+    const rawIsbn = String(row.isbn || '').replace(/[^0-9X]/gi, '').trim()
+    if (rawIsbn.length < 8 && row.title) {
+      targets.push({
+        row,
+        book: books[index],
+        title: row.title,
+        author: row.author || '',
+      })
+    }
+  })
+
+  if (targets.length === 0) {
+    return { dbRows, books }
+  }
+
+  const discoveredCovers = []
+  const CONCURRENCY = 5
+  for (let i = 0; i < targets.length; i += CONCURRENCY) {
+    const batch = targets.slice(i, i + CONCURRENCY)
+    await Promise.all(
+      batch.map(async ({ row, book, title, author }) => {
+        try {
+          const result = await searchGoogleBooks({
+            title,
+            author,
+            apiKey,
+            fetchFn,
+          })
+          if (result?.isbn) {
+            row.isbn = result.isbn
+            const resolvedCoverUrl =
+              result.coverUrl ||
+              `https://covers.openlibrary.org/b/isbn/${result.isbn}-L.jpg`
+            if (book) {
+              book.isbn = result.isbn
+              book.imageUrl = resolvedCoverUrl
+            }
+            if (result.coverUrl) {
+              discoveredCovers.push({ isbn: result.isbn, url: result.coverUrl })
+            }
+          }
+        } catch (err) {
+          console.warn(`[uploadcsv] Failed to lookup ISBN for "${title}":`, err?.message)
+        }
+      }),
+    )
+  }
+
+  if (discoveredCovers.length > 0 && queryFn) {
+    for (const { isbn, url } of discoveredCovers) {
+      try {
+        await upsertCoverInDb({ isbn, url, queryFn })
+      } catch (coverErr) {
+        console.warn(`[uploadcsv] Failed to save cover for ISBN ${isbn}:`, coverErr?.message)
+      }
+    }
+  }
+
+  return { dbRows, books, covers: discoveredCovers }
 }
 
 const readRawStreamFirst = async (req) => {
@@ -457,6 +546,18 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'No valid books found in the uploaded CSV.' })
     }
 
+    const executeQuery = req.dbQuery || (await createDefaultDbQuery())
+    const apiKey = req.googleBooksApiKey || getGoogleBooksApiKey()
+    const fetchFn = req.fetchFn || fetch
+
+    await enrichMissingIsbns({
+      dbRows,
+      books,
+      apiKey,
+      fetchFn,
+      queryFn: executeQuery,
+    })
+
     const cookieHeader = req.headers?.cookie || req.headers?.Cookie || ''
     const userId = resolveUserId(rawUserId, cookieHeader, { isNewUser })
     const maxAgeSeconds = 60 * 60 * 24 * 365 * 10
@@ -465,7 +566,6 @@ export default async function handler(req, res) {
       `${USER_ID_COOKIE_NAME}=${encodeURIComponent(userId)}; Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax`,
     )
 
-    const executeQuery = req.dbQuery || (await createDefaultDbQuery())
     await upsertUserInDatabase({
       userId,
       displayName,

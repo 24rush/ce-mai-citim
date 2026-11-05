@@ -13,6 +13,12 @@ import {
 import uploadCsvHandler, { parseCsvForDatabase, isAllowedShelf } from '../../api/uploadcsv.js'
 import getUserBooksHandler from '../../api/goodreads/[userId].js'
 import coverHandler from '../../api/cover.js'
+import isbnHandler, {
+  buildGoogleBooksQuery,
+  extractCoverFromVolume,
+  extractIsbnFromVolume,
+  searchGoogleBooks,
+} from '../../api/isbn.js'
 
 const createMockRes = () => {
   const res = {
@@ -439,6 +445,74 @@ test('uploadcsv picks up shelf from Bookshelves with positions when Bookshelves 
   assert.equal(books[0].bookshelves, 'read')
 })
 
+test('uploadcsv enriches missing ISBN via Google Books API during import', async () => {
+  const csv = [
+    'Book Id,Title,Author,ISBN,My Rating,Publisher,Binding,Number of Pages,Original Publication Year,Date Read,Date Added,Bookshelves,Bookshelves with positions,My Review,Spoiler',
+    '99,Sapiens,Yuval Noah Harari,,5,Harper,Paperback,443,2014,2021/01/01,2021/01/01,read,,,false',
+  ].join('\n')
+
+  const capturedQueries = []
+  const mockDbQuery = async (sqlText, values) => {
+    capturedQueries.push({ sqlText, values })
+    return []
+  }
+
+  const mockFetch = async () => ({
+    ok: true,
+    async json() {
+      return {
+        items: [
+          {
+            volumeInfo: {
+              title: 'Sapiens',
+              authors: ['Yuval Noah Harari'],
+              industryIdentifiers: [
+                { type: 'ISBN_13', identifier: '9780062316097' },
+              ],
+              imageLinks: {
+                thumbnail: 'http://books.google.com/sapiens.jpg&edge=curl',
+              },
+            },
+          },
+        ],
+      }
+    },
+  })
+
+  const req = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: {
+      displayName: 'Reader',
+      csv,
+    },
+    googleBooksApiKey: 'mock-key',
+    fetchFn: mockFetch,
+    dbQuery: mockDbQuery,
+  }
+  const res = createMockRes()
+
+  await uploadCsvHandler(req, res)
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.payload.books[0].isbn, '9780062316097')
+  assert.equal(
+    res.payload.books[0].imageUrl,
+    'https://books.google.com/sapiens.jpg',
+  )
+
+  const insertBookQuery = capturedQueries.find((q) => q.sqlText.includes('INSERT INTO books'))
+  assert.ok(insertBookQuery)
+  assert.ok(insertBookQuery.values.includes('9780062316097'))
+
+  const insertCoverQuery = capturedQueries.find((q) => q.sqlText.includes('INSERT INTO covers'))
+  assert.ok(insertCoverQuery)
+  assert.deepEqual(insertCoverQuery.values, [
+    '9780062316097',
+    'https://books.google.com/sapiens.jpg',
+  ])
+})
+
 test('cover endpoint rejects invalid methods and missing fields', async () => {
   const getRes = createMockRes()
   await coverHandler({ method: 'GET' }, getRes)
@@ -550,4 +624,233 @@ test('cover endpoint accepts JSON base64 image data and saves to blob and db', a
   const upsertQuery = capturedQueries.find((q) => q.sqlText.includes('INSERT INTO covers'))
   assert.ok(upsertQuery)
   assert.equal(upsertQuery.values[0], '9780143127741')
+})
+
+test('extractCoverFromVolume upgrades to HTTPS, strips &edge=curl, and selects highest resolution', () => {
+  const item = {
+    volumeInfo: {
+      imageLinks: {
+        smallThumbnail: 'http://books.google.com/small.jpg',
+        thumbnail: 'http://books.google.com/thumb.jpg&edge=curl',
+        medium: 'http://books.google.com/medium.jpg&edge=curl',
+      },
+    },
+  }
+  assert.equal(
+    extractCoverFromVolume(item),
+    'https://books.google.com/medium.jpg',
+  )
+  assert.equal(extractCoverFromVolume({}), null)
+})
+
+test('buildGoogleBooksQuery formats intitle and inauthor', () => {
+  assert.equal(
+    buildGoogleBooksQuery('Project Hail Mary', 'Andy Weir'),
+    'intitle:Project Hail Mary inauthor:Andy Weir',
+  )
+  assert.equal(buildGoogleBooksQuery('1984'), 'intitle:1984')
+  assert.equal(buildGoogleBooksQuery(''), '')
+})
+
+test('extractIsbnFromVolume prioritizes ISBN_13 over ISBN_10', () => {
+  const volumeWithBoth = {
+    volumeInfo: {
+      industryIdentifiers: [
+        { type: 'ISBN_10', identifier: '0553418025' },
+        { type: 'ISBN_13', identifier: '978-0553418026' },
+      ],
+    },
+  }
+  assert.equal(extractIsbnFromVolume(volumeWithBoth), '9780553418026')
+
+  const volumeWith10Only = {
+    volumeInfo: {
+      industryIdentifiers: [{ type: 'ISBN_10', identifier: '0-553-41802-5' }],
+    },
+  }
+  assert.equal(extractIsbnFromVolume(volumeWith10Only), '0553418025')
+
+  assert.equal(extractIsbnFromVolume({}), null)
+})
+
+test('searchGoogleBooks queries Google Books API and extracts ISBN', async () => {
+  let requestedUrl = ''
+  const mockFetch = async (url) => {
+    requestedUrl = url
+    return {
+      ok: true,
+      async json() {
+        return {
+          items: [
+            {
+              volumeInfo: {
+                title: 'The Martian',
+                authors: ['Andy Weir'],
+                industryIdentifiers: [
+                  { type: 'ISBN_13', identifier: '978-0553418026' },
+                ],
+                imageLinks: {
+                  thumbnail: 'http://books.google.com/martian.jpg',
+                },
+              },
+            },
+          ],
+        }
+      },
+    }
+  }
+
+  const result = await searchGoogleBooks({
+    title: 'The Martian',
+    author: 'Andy Weir',
+    apiKey: 'test-api-key',
+    fetchFn: mockFetch,
+  })
+
+  assert.ok(result)
+  assert.equal(result.isbn, '9780553418026')
+  assert.equal(result.title, 'The Martian')
+  assert.equal(result.author, 'Andy Weir')
+  assert.equal(result.thumbnail, 'https://books.google.com/martian.jpg')
+  assert.ok(requestedUrl.includes('key=test-api-key'))
+  assert.ok(requestedUrl.includes('intitle%3AThe%20Martian'))
+})
+
+test('isbn lambda handler returns 400 when title is missing', async () => {
+  const req = {
+    method: 'GET',
+    query: {},
+  }
+  const res = createMockRes()
+
+  await isbnHandler(req, res)
+
+  assert.equal(res.statusCode, 400)
+  assert.equal(res.payload.error, 'Book title is required.')
+})
+
+test('isbn lambda handler returns 405 for unsupported HTTP methods', async () => {
+  const req = {
+    method: 'DELETE',
+  }
+  const res = createMockRes()
+
+  await isbnHandler(req, res)
+
+  assert.equal(res.statusCode, 405)
+})
+
+test('isbn lambda handler queries Google Books API and updates DB if userId & bookId provided', async () => {
+  const capturedDbQueries = []
+  const mockDbQuery = async (sqlText, values) => {
+    capturedDbQueries.push({ sqlText, values })
+    return [{ book_id: 'book123', title: 'Dune', author: 'Frank Herbert', isbn: '9780441172719' }]
+  }
+
+  const mockFetch = async () => ({
+    ok: true,
+    async json() {
+      return {
+        items: [
+          {
+            volumeInfo: {
+              title: 'Dune',
+              authors: ['Frank Herbert'],
+              industryIdentifiers: [
+                { type: 'ISBN_13', identifier: '978-0441172719' },
+              ],
+              imageLinks: {
+                thumbnail: 'http://books.google.com/dune.jpg&edge=curl',
+              },
+            },
+          },
+        ],
+      }
+    },
+  })
+
+  const req = {
+    method: 'GET',
+    query: {
+      title: 'Dune',
+      author: 'Frank Herbert',
+      userId: 'testuser',
+      bookId: 'book123',
+    },
+    fetchFn: mockFetch,
+    dbQuery: mockDbQuery,
+  }
+  const res = createMockRes()
+
+  await isbnHandler(req, res)
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.payload.success, true)
+  assert.equal(res.payload.isbn, '9780441172719')
+  assert.equal(res.payload.coverUrl, 'https://books.google.com/dune.jpg')
+  assert.equal(res.payload.updated, true)
+
+  const updateQuery = capturedDbQueries.find((q) => q.sqlText.includes('UPDATE books'))
+  assert.ok(updateQuery)
+  assert.deepEqual(updateQuery.values, ['9780441172719', 'testuser', 'book123'])
+
+  const coverQuery = capturedDbQueries.find((q) => q.sqlText.includes('INSERT INTO covers'))
+  assert.ok(coverQuery)
+  assert.deepEqual(coverQuery.values, ['9780441172719', 'https://books.google.com/dune.jpg'])
+})
+
+test('isbn lambda handler supports backfill mode for user books', async () => {
+  const capturedDbQueries = []
+  const mockDbQuery = async (sqlText, values) => {
+    capturedDbQueries.push({ sqlText, values })
+    if (sqlText.includes('SELECT book_id')) {
+      return [
+        { book_id: 'b1', title: 'Foundation', author: 'Isaac Asimov' },
+        { book_id: 'b2', title: 'Solaris', author: 'Stanislaw Lem' },
+      ]
+    }
+    return [{ book_id: values[2], isbn: values[0] }]
+  }
+
+  const mockFetch = async (url) => ({
+    ok: true,
+    async json() {
+      const isSolaris = url.includes('Solaris')
+      return {
+        items: [
+          {
+            volumeInfo: {
+              title: isSolaris ? 'Solaris' : 'Foundation',
+              authors: [isSolaris ? 'Stanislaw Lem' : 'Isaac Asimov'],
+              industryIdentifiers: [
+                {
+                  type: 'ISBN_13',
+                  identifier: isSolaris ? '9780156027601' : '9780553293357',
+                },
+              ],
+            },
+          },
+        ],
+      }
+    },
+  })
+
+  const req = {
+    method: 'POST',
+    body: {
+      backfill: true,
+      userId: 'user1234',
+    },
+    fetchFn: mockFetch,
+    dbQuery: mockDbQuery,
+  }
+  const res = createMockRes()
+
+  await isbnHandler(req, res)
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.payload.success, true)
+  assert.equal(res.payload.updatedCount, 2)
+  assert.equal(res.payload.scannedCount, 2)
+  assert.equal(res.payload.books.length, 2)
 })
