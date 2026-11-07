@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import { BookCover } from 'book-cover-3d'
-import { ArrowUpDown, Share2, SquareArrowOutUpRight, Upload, UserRoundPen, UserSearch, WandSparkles } from 'lucide-react'
+import { ArrowUpDown, Upload, UserRoundPen, UserSearch, WandSparkles } from 'lucide-react'
 import {
   buildBookShareUrl,
   buildGoodreadsApiUrl,
@@ -128,7 +128,6 @@ function App() {
     () => initialRouteState.userId || getUserIdFromCookie() || DEFAULT_USER_ID,
   )
   const [cookieUserId, setCookieUserId] = useState(() => getUserIdFromCookie())
-  const [generateNewUser, setGenerateNewUser] = useState(false)
   const [showProfileModal, setShowProfileModal] = useState(false)
   const [displayNameInput, setDisplayNameInput] = useState('')
   const [csvFile, setCsvFile] = useState(null)
@@ -570,8 +569,8 @@ function App() {
       setError('')
 
       const csvText = await csvFile.text()
-      const existingCookieUserId = generateNewUser ? undefined : (getUserIdFromCookie() || cookieUserId)
-      const isExistingUser = Boolean(existingCookieUserId && !generateNewUser)
+      const existingCookieUserId = getUserIdFromCookie() || cookieUserId
+      const isExistingUser = Boolean(existingCookieUserId)
 
       const response = await fetch('/api/uploadcsv', {
         method: 'POST',
@@ -581,8 +580,7 @@ function App() {
         body: JSON.stringify({
           displayName: trimmedName,
           csv: csvText,
-          userId: existingCookieUserId || undefined,
-          isNewUser: generateNewUser,
+          userId: existingCookieUserId,
         }),
         credentials: 'include',
       })
@@ -624,8 +622,6 @@ function App() {
       if (data?.username || trimmedName) {
         setUsername(data?.username || trimmedName)
       }
-
-      setGenerateNewUser(false)
 
       if (Array.isArray(data?.books)) {
         setBooks(data.books.map((book, index) => normalizeCsvBook(book, index)))
@@ -674,7 +670,6 @@ function App() {
 
   const handleOpenProfileModal = () => {
     const activeCookieId = getUserIdFromCookie() || cookieUserId
-    setGenerateNewUser(false)
     if (activeCookieId) {
       if (!cookieUserId) {
         setCookieUserId(activeCookieId)
@@ -969,6 +964,18 @@ function App() {
                 <div className="profile-modal-header-spacer" />
                 <button
                   type="button"
+                  className="book-detail-share-button"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    shareBookLink(selectedBook)
+                  }}
+                  aria-label={`Share link for ${selectedBook.title}`}
+                >
+                  Share
+                </button>
+                <button
+                  type="button"
                   className="toolbar-clear-button"
                   onClick={closeBookDetails}
                   aria-label="Close book details"
@@ -1078,30 +1085,6 @@ function App() {
                   />
                 </div>
 
-                {cookieUserId ? (
-                  <div className="profile-modal-checkbox-row">
-                    <label className="profile-modal-checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={generateNewUser}
-                        onChange={(event) => {
-                          const isChecked = event.target.checked
-                          setGenerateNewUser(isChecked)
-                          if (isChecked) {
-                            setDisplayNameInput('')
-                            setTimeout(() => nameInputRef.current?.focus(), 50)
-                          } else {
-                            setDisplayNameInput(username || '')
-                          }
-                          setUploadError('')
-                        }}
-                        className="profile-modal-checkbox"
-                      />
-                      <span>Generează utilizator / URL nou</span>
-                    </label>
-                  </div>
-                ) : null}
-
                 {uploadError ? <p className="profile-modal-error">{uploadError}</p> : null}
 
                 <button
@@ -1111,11 +1094,11 @@ function App() {
                 >
                   {isUploadingCsv
                     ? 'Se încarcă...'
-                    : (cookieUserId && !generateNewUser ? 'Actualizează librăria' : 'Generează URL')}
+                    : (cookieUserId ? 'Actualizează librăria' : 'Generează URL')}
                 </button>
               </form>
 
-              {!generateNewUser && generatedProfileUrl ? (
+              {generatedProfileUrl ? (
                 <div className="profile-url-result">
                   <label className="profile-modal-label">
                     URL-ul tau pe 'Ce mai citim'
@@ -1302,34 +1285,6 @@ function App() {
                           {book.averageRating.toFixed(2)}
                         </div>
                       ) : null}
-
-                      <div className="book-actions">
-                        <button
-                          type="button"
-                          className="book-preview-button"
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            openBookDetails(book)
-                          }}
-                          aria-label={`Open details for ${book.title}`}
-                        >
-                          <SquareArrowOutUpRight size={16} strokeWidth={2} aria-hidden="true" />
-                        </button>
-
-                        <button
-                          type="button"
-                          className="book-preview-button book-share-button"
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            shareBookLink(book)
-                          }}
-                          aria-label={`Share link for ${book.title}`}
-                        >
-                          <Share2 size={16} strokeWidth={2} aria-hidden="true" />
-                        </button>
-                      </div>
                     </div>
                   </article>
                 )

@@ -476,7 +476,7 @@ export const extractUploadPayload = async (req) => {
       userId: String(req.body.userId || req.query?.userId || '').trim(),
       displayName: String(req.body.displayName || req.query?.displayName || '').trim(),
       csvText: String(req.body.csv || req.body.file || ''),
-      isNewUser: Boolean(req.body.isNewUser || req.body.generateNewUser || req.query?.isNewUser === 'true'),
+      isNewUser: Boolean(req.body.isNewUser || req.query?.isNewUser),
     }
   }
 
@@ -488,7 +488,7 @@ export const extractUploadPayload = async (req) => {
       userId: String(fields.userId || req.query?.userId || '').trim(),
       displayName: String(fields.displayName || req.query?.displayName || '').trim(),
       csvText: String(fields.file || fields.csv || ''),
-      isNewUser: Boolean(fields.isNewUser === 'true' || req.query?.isNewUser === 'true'),
+      isNewUser: Boolean(fields.isNewUser === 'true' || fields.isNewUser === true || req.query?.isNewUser),
     }
   }
 
@@ -498,7 +498,7 @@ export const extractUploadPayload = async (req) => {
       userId: String(parsed.userId || req.query?.userId || '').trim(),
       displayName: String(parsed.displayName || req.query?.displayName || '').trim(),
       csvText: String(parsed.csv || parsed.file || ''),
-      isNewUser: Boolean(parsed.isNewUser || parsed.generateNewUser || req.query?.isNewUser === 'true'),
+      isNewUser: Boolean(parsed.isNewUser || req.query?.isNewUser),
     }
   }
 
@@ -506,7 +506,7 @@ export const extractUploadPayload = async (req) => {
     userId: String(req.query?.userId || '').trim(),
     displayName: String(req.query?.displayName || '').trim(),
     csvText: rawBuffer.toString('utf8'),
-    isNewUser: req.query?.isNewUser === 'true',
+    isNewUser: Boolean(req.query?.isNewUser),
   }
 }
 

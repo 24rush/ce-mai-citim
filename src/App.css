@@ -1,8 +1,8 @@
 :root {
   --accent-color: #8b5cf6;
-  --accent-color-soft: rgba(139, 92, 246, 0.24);
+  --accent-color-soft: rgba(139, 92, 246, 0.54);
   --accent-color-strong: rgba(139, 92, 246, 0.9);
-  --accent-color-glow: rgba(139, 92, 246, 0.18);
+  --accent-color-glow: rgba(139, 92, 246, 0.68);
 }
 
 .app-shell {
@@ -190,10 +190,47 @@
   position: sticky;
   top: 0;
   z-index: 10;
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: flex-end;
   margin-bottom: 12px;
+}
+
+.book-detail-header .book-detail-share-button,
+.book-detail-header .book-share-button {
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1;
+  border-radius: 6px;
+  border: 1px solid var(--accent-color-soft);
+  background: var(--accent-color-glow);
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.book-detail-header .book-detail-share-button:hover,
+.book-detail-header .book-share-button:hover {
+  background: var(--accent-color-soft);
+  border-color: var(--accent-color-strong);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.book-detail-header .book-detail-share-button:active,
+.book-detail-header .book-share-button:active {
+  transform: scale(0.96);
+}
+
+.book-detail-header .toolbar-clear-button {
+  justify-self: end;
 }
 
 .profile-modal-close {
