@@ -1,4 +1,5 @@
 import { createDefaultDbQuery, ensureEnvLoaded } from './_lib/db.js'
+import { convertIsbn10To13, convertIsbn13To10 } from '../src/lib/goodreads.js'
 
 export const getGoogleBooksApiKey = () => {
   ensureEnvLoaded()
@@ -90,19 +91,87 @@ export const extractBestIsbnFromItems = (items = []) => {
   return firstIsbn10
 }
 
+export const extractPublishedYearFromVolume = (item) => {
+  const publishedDate = item?.volumeInfo?.publishedDate
+  if (!publishedDate) return null
+  const str = String(publishedDate).trim()
+  const match = str.match(/\b([12]\d{3})\b/)
+  if (match) {
+    const year = Number.parseInt(match[1], 10)
+    if (Number.isFinite(year) && year > 0) {
+      return year
+    }
+  }
+  return null
+}
+
+export const extractPageCountFromVolume = (item) => {
+  const pageCount = item?.volumeInfo?.pageCount
+  if (pageCount !== undefined && pageCount !== null && pageCount !== '') {
+    const parsed = Number.parseInt(pageCount, 10)
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed
+    }
+  }
+  return null
+}
+
+export const buildSearchResult = (topItem, defaultIsbn, defaultTitle, defaultAuthor) => {
+  if (!topItem) return null
+  const resolvedIsbn = defaultIsbn || extractIsbnFromVolume(topItem) || null
+  const coverUrl = extractCoverFromVolume(topItem)
+  const publishedDate = topItem?.volumeInfo?.publishedDate || null
+  const publishedYear = extractPublishedYearFromVolume(topItem)
+  const pageCount = extractPageCountFromVolume(topItem)
+
+  return {
+    isbn: resolvedIsbn,
+    title: topItem?.volumeInfo?.title || defaultTitle,
+    author: topItem?.volumeInfo?.authors?.[0] || defaultAuthor,
+    coverUrl,
+    imageUrl: coverUrl,
+    thumbnail: coverUrl,
+    publishedDate,
+    publishedYear,
+    pageCount,
+  }
+}
+
 export const searchGoogleBooks = async ({
   title,
   author,
+  isbn: queryIsbn,
   apiKey = getGoogleBooksApiKey(),
   fetchFn = fetch,
 } = {}) => {
   const cleanTitle = String(title || '').trim()
   const cleanAuthor = String(author || '').trim()
-  if (!cleanTitle) return null
+  const cleanProvidedIsbn = cleanIsbn(queryIsbn)
+  if (!cleanTitle && !cleanProvidedIsbn) return null
 
   const keyParam = apiKey ? `&key=${encodeURIComponent(apiKey)}` : ''
 
-  // 1. Primary strict search: intitle: + inauthor:
+  // 1. If ISBN is provided, try exact ISBN query first
+  if (cleanProvidedIsbn) {
+    try {
+      const isbnUrl = `https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(
+        cleanProvidedIsbn,
+      )}&maxResults=1&printType=books${keyParam}`
+      const res = await fetchFn(isbnUrl)
+      if (res.ok) {
+        const data = await res.json()
+        const topItem = data?.items?.[0]
+        if (topItem) {
+          const isbn = extractIsbnFromVolume(topItem) || cleanProvidedIsbn
+          return buildSearchResult(topItem, isbn, cleanTitle, cleanAuthor)
+        }
+      }
+    } catch {
+      // Continue to title/author search
+    }
+  }
+
+  // 2. Primary strict search: intitle: + inauthor:
   const primaryQuery = buildGoogleBooksQuery(cleanTitle, cleanAuthor)
   if (primaryQuery) {
     try {
@@ -113,18 +182,11 @@ export const searchGoogleBooks = async ({
       if (res.ok) {
         const data = await res.json()
         const isbn = extractBestIsbnFromItems(data?.items)
-        if (isbn) {
+        if (isbn || data?.items?.length > 0) {
           const topItem =
-            data.items.find((item) => extractIsbnFromVolume(item) === isbn) || data.items[0]
-          const coverUrl = extractCoverFromVolume(topItem)
-          return {
-            isbn,
-            title: topItem?.volumeInfo?.title || cleanTitle,
-            author: topItem?.volumeInfo?.authors?.[0] || cleanAuthor,
-            coverUrl,
-            imageUrl: coverUrl,
-            thumbnail: coverUrl,
-          }
+            (isbn && data.items.find((item) => extractIsbnFromVolume(item) === isbn)) ||
+            data.items[0]
+          return buildSearchResult(topItem, isbn, cleanTitle, cleanAuthor)
         }
       }
     } catch {
@@ -132,7 +194,7 @@ export const searchGoogleBooks = async ({
     }
   }
 
-  // 2. Fallback general search: title + author
+  // 3. Fallback general search: title + author
   const fallbackQuery = `${cleanTitle} ${cleanAuthor}`.trim()
   if (fallbackQuery && fallbackQuery !== primaryQuery) {
     try {
@@ -143,19 +205,12 @@ export const searchGoogleBooks = async ({
       if (fallbackRes.ok) {
         const fallbackData = await fallbackRes.json()
         const fallbackIsbn = extractBestIsbnFromItems(fallbackData?.items)
-        if (fallbackIsbn) {
+        if (fallbackIsbn || fallbackData?.items?.length > 0) {
           const topItem =
-            fallbackData.items.find((item) => extractIsbnFromVolume(item) === fallbackIsbn) ||
+            (fallbackIsbn &&
+              fallbackData.items.find((item) => extractIsbnFromVolume(item) === fallbackIsbn)) ||
             fallbackData.items[0]
-          const coverUrl = extractCoverFromVolume(topItem)
-          return {
-            isbn: fallbackIsbn,
-            title: topItem?.volumeInfo?.title || cleanTitle,
-            author: topItem?.volumeInfo?.authors?.[0] || cleanAuthor,
-            coverUrl,
-            imageUrl: coverUrl,
-            thumbnail: coverUrl,
-          }
+          return buildSearchResult(topItem, fallbackIsbn, cleanTitle, cleanAuthor)
         }
       }
     } catch {
@@ -166,19 +221,18 @@ export const searchGoogleBooks = async ({
   return null
 }
 
-export const updateBookIsbnInDb = async ({ userId, bookId, isbn, queryFn }) => {
-  if (!userId || !bookId || !isbn) return null
+export const updateBookIsbnInDb = async ({ userId: _userId, bookId, isbn, queryFn }) => {
+  if (!bookId || !isbn) return null
   const executeQuery = queryFn || (await createDefaultDbQuery())
   const sql = `
     UPDATE books
     SET isbn = $1, updated_at = NOW()
-    WHERE user_id = $2
-      AND book_id = $3
+    WHERE book_id = $2
       AND (isbn IS NULL OR isbn = '')
     RETURNING book_id, title, author, isbn;
   `.trim()
 
-  const rows = await executeQuery(sql, [isbn, userId, bookId])
+  const rows = await executeQuery(sql, [isbn, bookId])
   return rows?.[0] || null
 }
 
@@ -195,6 +249,17 @@ export const upsertCoverInDb = async ({ isbn, url, queryFn }) => {
   `.trim()
 
   const rows = await executeQuery(sql, [clean, url])
+
+  const altIsbn =
+    clean.length === 13 ? convertIsbn13To10(clean) : convertIsbn10To13(clean)
+  if (altIsbn && altIsbn !== clean) {
+    try {
+      await executeQuery(sql, [altIsbn, url])
+    } catch {
+      // Best effort
+    }
+  }
+
   return rows?.[0] || null
 }
 
@@ -211,10 +276,11 @@ export const backfillUserBooksWithoutIsbn = async ({
 
   const executeQuery = queryFn || (await createDefaultDbQuery())
   const selectSql = `
-    SELECT book_id, title, author
-    FROM books
-    WHERE user_id = $1
-      AND (isbn IS NULL OR isbn = '')
+    SELECT b.book_id, b.title, b.author
+    FROM user_shelves us
+    JOIN books b ON b.book_id = us.book_id
+    WHERE us.user_id = $1
+      AND (b.isbn IS NULL OR b.isbn = '')
     LIMIT $2;
   `.trim()
 
@@ -368,6 +434,7 @@ export default async function handler(req, res) {
     const searchResult = await searchGoogleBooks({
       title,
       author,
+      isbn: body.isbn || query.isbn,
       apiKey,
       fetchFn,
     })
@@ -414,6 +481,9 @@ export default async function handler(req, res) {
       coverUrl: searchResult.coverUrl,
       imageUrl: searchResult.coverUrl,
       thumbnail: searchResult.thumbnail,
+      publishedDate: searchResult.publishedDate || null,
+      publishedYear: searchResult.publishedYear || null,
+      pageCount: searchResult.pageCount || null,
       updated: Boolean(updatedDbRecord),
     })
   } catch (error) {

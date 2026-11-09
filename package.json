@@ -15,6 +15,7 @@
     "@hugeicons/core-free-icons": "^4.3.5",
     "@hugeicons/react": "^1.1.10",
     "@neondatabase/serverless": "^1.2.0",
+    "@supabase/supabase-js": "^2.119.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vercel/blob": "^2.8.2",
     "book-cover-3d": "^1.1.2",

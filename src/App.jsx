@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import { BookCover } from 'book-cover-3d'
-import { ArrowUpDown, Upload, UserRoundPen, UserSearch, WandSparkles } from 'lucide-react'
+import { ArrowUpDown, Bookmark, Check, ChevronDown, Copy, LogOut, Save, Upload, UserRoundPen, UserSearch, WandSparkles } from 'lucide-react'
 import {
   buildBookShareUrl,
   buildGoodreadsApiUrl,
-  extractGoodreadsUserId,
   getFinishedBooksTotals,
+  getRouteStateFromPath,
   getUserIdFromCookie,
+  isRootPath,
   matchesShelf,
   normalizeCsvBook,
   parseGoodreadsCsv,
@@ -16,6 +17,8 @@ import {
 import GradientASCII from './components/GradientASCII'
 import GooeyNav from './components/GooeyNav'
 import GlideSelect from './components/GlideSelect'
+import AuthModalView from './components/AuthModalView'
+import { createClient, isSupabaseConfigured } from './lib/client'
 import './App.css'
 
 const INITIAL_PULLED_IMAGES_COUNT = 10
@@ -27,6 +30,11 @@ const SHELF_OPTIONS = [
   { id: 'currently-reading', label: 'În curs', query: 'currently-reading' },
   { id: 'did-not-finish', label: 'Abandonate', query: 'did-not-finish' },
 ]
+
+const getShelfLabel = (shelfId) => {
+  const match = SHELF_OPTIONS.find((s) => s.id === shelfId)
+  return match ? match.label : 'De citit'
+}
 
 const BOOK_SORT_OPTIONS = [
   {
@@ -57,22 +65,6 @@ const getBookSortOptions = (shelfId) => {
   }
 
   return BOOK_SORT_OPTIONS
-}
-
-const getRouteStateFromPath = (pathname = window.location.pathname) => {
-  const segments = pathname.split('/').filter(Boolean)
-  const userSegment = segments[0] || ''
-  const shelfSegment = segments[1] || 'read'
-  const bookSegment = segments[2] || ''
-
-  const userId = extractGoodreadsUserId(userSegment)
-  const shelf = SHELF_OPTIONS.some((option) => option.id === shelfSegment) ? shelfSegment : 'read'
-
-  return {
-    userId,
-    shelf,
-    bookId: bookSegment,
-  }
 }
 
 const fetchBooksFromApi = async (apiUrl, signal) => {
@@ -128,18 +120,33 @@ function App() {
     () => initialRouteState.userId || getUserIdFromCookie() || DEFAULT_USER_ID,
   )
   const [cookieUserId, setCookieUserId] = useState(() => getUserIdFromCookie())
+  const [supabaseUser, setSupabaseUser] = useState(null)
+  const supabaseUserRef = useRef(supabaseUser)
+  useEffect(() => {
+    supabaseUserRef.current = supabaseUser
+  }, [supabaseUser])
+  const [isCheckingAuth, setIsCheckingAuth] = useState(() => isSupabaseConfigured())
   const [showProfileModal, setShowProfileModal] = useState(false)
   const [displayNameInput, setDisplayNameInput] = useState('')
   const [csvFile, setCsvFile] = useState(null)
   const [isUploadingCsv, setIsUploadingCsv] = useState(false)
   const [uploadError, setUploadError] = useState('')
+  const [savedName, setSavedName] = useState(false)
+  const [isSavingName, setIsSavingName] = useState(false)
   const [generatedProfileUrl, setGeneratedProfileUrl] = useState('')
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('')
   const [copiedUrl, setCopiedUrl] = useState(false)
   const [bookQrCodeDataUrl, setBookQrCodeDataUrl] = useState('')
   const [requestedBookId, setRequestedBookId] = useState(() => initialRouteState.bookId || '')
   const [selectedBook, setSelectedBook] = useState(null)
+  const [targetShelf, setTargetShelf] = useState('to-read')
+  const [shelfDropdownOpen, setShelfDropdownOpen] = useState(false)
+  const [isSavingShelf, setIsSavingShelf] = useState(false)
+  const [savedShelf, setSavedShelf] = useState(false)
+  const shelfDropdownRef = useRef(null)
+  const [userShelvesByBookId, setUserShelvesByBookId] = useState({})
   const [isLoading, setIsLoading] = useState(true)
+  const [booksFetchTrigger, setBooksFetchTrigger] = useState(0)
   const availableBookSortOptions = useMemo(() => getBookSortOptions(activeShelf), [activeShelf])
   const [error, setError] = useState('')
   const [pulledImagesCount, setPulledImagesCount] = useState(INITIAL_PULLED_IMAGES_COUNT)
@@ -152,6 +159,9 @@ function App() {
   const nameInputRef = useRef(null)
 
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
+  const isInitialRootUrlRef = useRef(
+    typeof window !== 'undefined' && isRootPath(window.location.pathname),
+  )
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768)
@@ -159,8 +169,194 @@ function App() {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
+  const syncUserProfileWithServer = async (user, { hideModal = false } = {}) => {
+    if (!user?.id) return null
+
+    try {
+      const activeCookieId = getUserIdFromCookie() || cookieUserId
+      const emailPrefix = user.email ? user.email.split('@')[0] : ''
+
+      const response = await fetch('/api/profile', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          authUserId: user.id,
+          email: user.email,
+          displayName: emailPrefix,
+          existingUserId: activeCookieId,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Profile sync failed with status ${response.status}`)
+      }
+
+      const data = await response.json()
+      const nextUserId = data.userId
+      const nextUrl =
+        data.profileUrl ||
+        data.url ||
+        `${window.location.origin}/${nextUserId}`
+
+      if (nextUserId) {
+        setUserIdCookie(nextUserId)
+        setCookieUserId(String(nextUserId))
+      }
+
+      const finalName = data.displayName || emailPrefix
+      if (finalName) {
+        setDisplayNameInput(finalName)
+      }
+
+      if (nextUrl) {
+        setGeneratedProfileUrl(nextUrl)
+        QRCode.toDataURL(nextUrl)
+          .then((dataUrl) => setQrCodeDataUrl(dataUrl))
+          .catch((qrError) => {
+            console.error(qrError)
+          })
+      }
+
+      const currentPathUserId = getRouteStateFromPath(window.location.pathname).userId
+      const isVisitingOtherProfile = Boolean(
+        currentPathUserId && nextUserId && currentPathUserId !== String(nextUserId),
+      )
+
+      // Only redirect when going from root url not when on another profile page
+      const shouldRedirect = isInitialRootUrlRef.current && !isVisitingOtherProfile
+
+      if (shouldRedirect && nextUserId) {
+        isInitialRootUrlRef.current = false
+        setCurrentUserId(String(nextUserId))
+        setRequestedBookId('')
+        setSelectedBook(null)
+        window.history.replaceState({}, '', `/${nextUserId}`)
+        setBooksFetchTrigger((prev) => prev + 1)
+        if (finalName) {
+          setUsername(finalName)
+        }
+      }
+
+      if (hideModal) {
+        setShowProfileModal(false)
+      }
+
+      return data
+    } catch (err) {
+      console.error('Failed to sync profile with server:', err)
+      if (hideModal) {
+        setShowProfileModal(false)
+      }
+      return null
+    }
+  }
+
+  const handleSaveDisplayName = async () => {
+    const trimmed = displayNameInput.trim()
+    if (!trimmed) {
+      setUploadError('Introdu numele care va fi afișat.')
+      return
+    }
+
+    const targetUserId = cookieUserId || currentUserId
+    const authId = supabaseUser?.id || ''
+
+    try {
+      setIsSavingName(true)
+      setUploadError('')
+
+      const response = await fetch('/api/profile', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          displayName: trimmed,
+          userId: targetUserId,
+          authUserId: authId,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to save display name: status ${response.status}`)
+      }
+
+      const data = await response.json()
+      const finalName = data.displayName || trimmed
+      setDisplayNameInput(finalName)
+      if (!currentUserId || currentUserId === targetUserId) {
+        setUsername(finalName)
+      }
+      setSavedName(true)
+      setTimeout(() => setSavedName(false), 2000)
+    } catch (err) {
+      console.error('Failed to save display name:', err)
+      setUploadError('Nu am putut salva numele afișat.')
+    } finally {
+      setIsSavingName(false)
+    }
+  }
+
   useEffect(() => {
-    if (window.location.pathname === '/' || window.location.pathname === '') {
+    if (!isSupabaseConfigured()) {
+      setIsCheckingAuth(false)
+      return
+    }
+
+    try {
+      const supabase = createClient()
+      supabase.auth
+        .getSession()
+        .then(({ data: { session } }) => {
+          const user = session?.user ?? null
+          setSupabaseUser(user)
+          if (user) {
+            syncUserProfileWithServer(user)
+          }
+        })
+        .catch((err) => {
+          console.warn('Supabase getSession error:', err)
+        })
+        .finally(() => {
+          setIsCheckingAuth(false)
+        })
+
+      const {
+        data: { subscription },
+      } = supabase.auth.onAuthStateChange((event, session) => {
+        const user = session?.user ?? null
+        setSupabaseUser(user)
+        setIsCheckingAuth(false)
+        if (user) {
+          syncUserProfileWithServer(user, { hideModal: event === 'SIGNED_IN' })
+        }
+      })
+
+      return () => {
+        subscription?.unsubscribe()
+      }
+    } catch (err) {
+      console.warn('Supabase auth listener error:', err)
+      setIsCheckingAuth(false)
+    }
+  }, [])
+
+  const handleSignOut = async () => {
+    try {
+      const supabase = createClient()
+      await supabase.auth.signOut()
+      setSupabaseUser(null)
+      setGeneratedProfileUrl('')
+      setQrCodeDataUrl('')
+    } catch (err) {
+      console.error('Sign out error:', err)
+    }
+  }
+
+  useEffect(() => {
+    if (isRootPath(window.location.pathname)) {
       const initialId = getUserIdFromCookie() || DEFAULT_USER_ID
       window.history.replaceState({}, '', `/${initialId}`)
     }
@@ -170,7 +366,11 @@ function App() {
     const syncRouteState = () => {
       const { userId, shelf, bookId } = getRouteStateFromPath(window.location.pathname)
 
-      if (userId) {
+      if (isRootPath(window.location.pathname)) {
+        const fallbackId = cookieUserId || getUserIdFromCookie() || DEFAULT_USER_ID
+        window.history.replaceState({}, '', `/${fallbackId}`)
+        setCurrentUserId(fallbackId)
+      } else if (userId) {
         setCurrentUserId(userId)
       } else {
         setCurrentUserId(DEFAULT_USER_ID)
@@ -182,7 +382,7 @@ function App() {
 
     window.addEventListener('popstate', syncRouteState)
     return () => window.removeEventListener('popstate', syncRouteState)
-  }, [])
+  }, [cookieUserId])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -197,7 +397,9 @@ function App() {
         setBooks(apiBooks)
         if (apiUsername) {
           setUsername(apiUsername)
-          setDisplayNameInput((prev) => prev || apiUsername)
+          if (!supabaseUserRef.current) {
+            setDisplayNameInput((prev) => prev || apiUsername)
+          }
         }
       } catch (loadError) {
         if (controller.signal.aborted) return
@@ -215,7 +417,7 @@ function App() {
     return () => {
       controller.abort()
     }
-  }, [currentUserId])
+  }, [currentUserId, booksFetchTrigger])
 
   useEffect(() => {
     const defaultSortForShelf = activeShelf === 'read' ? 'recently-read' : (availableBookSortOptions[0]?.id || 'newest')
@@ -262,6 +464,64 @@ function App() {
       .then((dataUrl) => setBookQrCodeDataUrl(dataUrl))
       .catch(() => setBookQrCodeDataUrl(''))
   }, [selectedBook?.link])
+
+  useEffect(() => {
+    if (!shelfDropdownOpen) return
+
+    const handleClickOutside = (event) => {
+      if (shelfDropdownRef.current && !shelfDropdownRef.current.contains(event.target)) {
+        setShelfDropdownOpen(false)
+      }
+    }
+
+    document.addEventListener('pointerdown', handleClickOutside)
+    return () => document.removeEventListener('pointerdown', handleClickOutside)
+  }, [shelfDropdownOpen])
+
+  useEffect(() => {
+    const activeUserId = cookieUserId || getUserIdFromCookie()
+    if (!activeUserId) {
+      setUserShelvesByBookId({})
+      return
+    }
+
+    let isSubscribed = true
+    fetch(`/api/shelves?userId=${encodeURIComponent(activeUserId)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!isSubscribed || !data?.shelvesByBookId) return
+        setUserShelvesByBookId(data.shelvesByBookId)
+      })
+      .catch((err) => {
+        console.warn('Failed to load user shelves at page load:', err)
+      })
+
+    return () => {
+      isSubscribed = false
+    }
+  }, [cookieUserId])
+
+  const loggedInUserBook = useMemo(() => {
+    if (!selectedBook) return null
+    const bookId = String(selectedBook.bookId || selectedBook.id || '')
+    return userShelvesByBookId[bookId] || null
+  }, [selectedBook, userShelvesByBookId])
+
+  useEffect(() => {
+    if (!selectedBook) {
+      setSavedShelf(false)
+      setShelfDropdownOpen(false)
+      return
+    }
+
+    if (loggedInUserBook?.shelf) {
+      setTargetShelf(loggedInUserBook.shelf)
+      setSavedShelf(true)
+    } else {
+      setTargetShelf('to-read')
+      setSavedShelf(false)
+    }
+  }, [selectedBook, loggedInUserBook])
 
   const shelfBooks = useMemo(() => {
     return books.filter((book) => matchesShelf(book, activeShelf))
@@ -366,12 +626,14 @@ function App() {
     const candidateBooks = visibleBooks.slice(0, pulledImagesCount)
 
     const booksToSync = candidateBooks.filter((b) => {
-      const cleanIsbn = String(b.isbn || '').replace(/[^0-9X]/gi, '').trim()
+      const cleanIsbn13 = String(b.isbn13 || (b.isbn?.length === 13 ? b.isbn : '') || '').replace(/[^0-9X]/gi, '').trim()
+      const cleanIsbn10 = String(b.isbn10 || (b.isbn?.length === 10 ? b.isbn : '') || '').replace(/[^0-9X]/gi, '').trim()
+      const syncKey = cleanIsbn13 || cleanIsbn10 || String(b.isbn || '').replace(/[^0-9X]/gi, '').trim()
       return (
-        cleanIsbn.length >= 8 &&
+        syncKey.length >= 8 &&
         b.imageUrl &&
         b.imageUrl.includes('openlibrary.org') &&
-        !syncedCoversRef.current.has(cleanIsbn)
+        !syncedCoversRef.current.has(syncKey)
       )
     })
 
@@ -382,11 +644,18 @@ function App() {
     const syncCovers = async () => {
       for (const book of booksToSync) {
         if (isCancelled) break
-        const cleanIsbn = String(book.isbn || '').replace(/[^0-9X]/gi, '').trim()
-        syncedCoversRef.current.add(cleanIsbn)
+        const cleanIsbn13 = String(book.isbn13 || (book.isbn?.length === 13 ? book.isbn : '') || '').replace(/[^0-9X]/gi, '').trim()
+        const cleanIsbn10 = String(book.isbn10 || (book.isbn?.length === 10 ? book.isbn : '') || '').replace(/[^0-9X]/gi, '').trim()
+        const primaryIsbn = cleanIsbn13 || cleanIsbn10 || String(book.isbn || '').replace(/[^0-9X]/gi, '').trim()
 
+        if (primaryIsbn) syncedCoversRef.current.add(primaryIsbn)
+        if (cleanIsbn13) syncedCoversRef.current.add(cleanIsbn13)
+        if (cleanIsbn10) syncedCoversRef.current.add(cleanIsbn10)
+
+        // Try OpenLibrary with ISBN-13 first, then ISBN-10, then existing image URL
         const candidateUrls = [
-          cleanIsbn ? `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-L.jpg` : null,
+          cleanIsbn13 ? `https://covers.openlibrary.org/b/isbn/${cleanIsbn13}-L.jpg` : null,
+          cleanIsbn10 && cleanIsbn10 !== cleanIsbn13 ? `https://covers.openlibrary.org/b/isbn/${cleanIsbn10}-L.jpg` : null,
           book.imageUrl && !book.imageUrl.includes('goodreads.com') && !book.imageUrl.includes('ssl-images-amazon.com')
             ? book.imageUrl
             : null,
@@ -411,16 +680,41 @@ function App() {
           }
         }
 
+        // Fallback: If OpenLibrary didn't have the cover (for either ISBN13 or ISBN10), query Google Books API via /api/isbn
+        if (!loadedBlob && (book.title || primaryIsbn)) {
+          try {
+            const searchParams = new URLSearchParams()
+            if (book.title) searchParams.set('title', book.title)
+            if (book.author) searchParams.set('author', book.author)
+            if (primaryIsbn) searchParams.set('isbn', primaryIsbn)
+            const googleRes = await fetch(`/api/isbn?${searchParams.toString()}`)
+            if (googleRes.ok) {
+              const googleData = await googleRes.json()
+              if (googleData?.coverUrl) {
+                const imgRes = await fetch(googleData.coverUrl)
+                if (imgRes.ok) {
+                  const blob = await imgRes.blob()
+                  if (blob.size >= 1000 && !blob.type.includes('html')) {
+                    loadedBlob = blob
+                  }
+                }
+              }
+            }
+          } catch (googleErr) {
+            console.warn('Google Books fallback failed for:', book.title, googleErr)
+          }
+        }
+
         if (!loadedBlob) continue
 
         // Immediately display the loaded cover on the book
         const localCoverUrl = URL.createObjectURL(loadedBlob)
         if (!isCancelled) {
           setBooks((prev) =>
-            prev.map((b) => (b.isbn === book.isbn ? { ...b, imageUrl: localCoverUrl } : b)),
+            prev.map((b) => (b.id === book.id || b.isbn === book.isbn ? { ...b, imageUrl: localCoverUrl } : b)),
           )
           setSelectedBook((prev) =>
-            prev && prev.isbn === book.isbn ? { ...prev, imageUrl: localCoverUrl } : prev,
+            prev && (prev.id === book.id || prev.isbn === book.isbn) ? { ...prev, imageUrl: localCoverUrl } : prev,
           )
         }
 
@@ -432,13 +726,13 @@ function App() {
             reader.readAsDataURL(loadedBlob)
           })
 
-          const uploadRes = await fetch(`/api/cover?isbn=${encodeURIComponent(cleanIsbn)}`, {
+          const uploadRes = await fetch(`/api/cover?isbn=${encodeURIComponent(primaryIsbn)}`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              isbn: cleanIsbn,
+              isbn: primaryIsbn,
               dataUrl,
             }),
           })
@@ -447,10 +741,10 @@ function App() {
             const data = await uploadRes.json()
             if (data?.url && !isCancelled) {
               setBooks((prev) =>
-                prev.map((b) => (b.isbn === book.isbn ? { ...b, imageUrl: data.url } : b)),
+                prev.map((b) => (b.id === book.id || b.isbn === book.isbn ? { ...b, imageUrl: data.url } : b)),
               )
               setSelectedBook((prev) =>
-                prev && prev.isbn === book.isbn ? { ...prev, imageUrl: data.url } : prev,
+                prev && (prev.id === book.id || prev.isbn === book.isbn) ? { ...prev, imageUrl: data.url } : prev,
               )
               URL.revokeObjectURL(localCoverUrl)
             }
@@ -538,7 +832,109 @@ function App() {
     window.history.pushState({}, '', routePath)
     setRequestedBookId('')
     setSelectedBook(null)
+    setShelfDropdownOpen(false)
+    setSavedShelf(false)
     setError('')
+  }
+
+  const handleSaveBookToShelf = async (shelfToSave = targetShelf) => {
+    if (!selectedBook) return
+    const activeUser = cookieUserId || getUserIdFromCookie()
+    if (!activeUser) {
+      closeBookDetails()
+      setShowProfileModal(true)
+      return
+    }
+
+    const bookId = String(selectedBook.bookId || selectedBook.id || '')
+    if (!bookId) return
+
+    try {
+      setIsSavingShelf(true)
+      const response = await fetch('/api/shelves', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: activeUser,
+          bookId,
+          shelf: shelfToSave,
+          book: {
+            bookId,
+            title: selectedBook.title,
+            author: selectedBook.author,
+            isbn: selectedBook.isbn,
+            pages: selectedBook.pages,
+            publishedYear: selectedBook.publishedYear,
+            publisher: selectedBook.publisher,
+            binding: selectedBook.binding,
+          },
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to save book to shelf: status ${response.status}`)
+      }
+
+      const data = await response.json()
+      const savedShelfName = data.shelf || shelfToSave
+      setTargetShelf(savedShelfName)
+      setSavedShelf(true)
+      setUserShelvesByBookId((prev) => ({
+        ...prev,
+        [bookId]: {
+          ...(prev[bookId] || {}),
+          bookId,
+          shelf: savedShelfName,
+          title: selectedBook.title,
+          author: selectedBook.author,
+          isbn: selectedBook.isbn,
+        },
+      }))
+    } catch (err) {
+      console.error('Error saving book to shelf:', err)
+    } finally {
+      setIsSavingShelf(false)
+    }
+  }
+
+  const handleRemoveBookFromShelf = async () => {
+    if (!selectedBook) return
+    const activeUser = cookieUserId || getUserIdFromCookie()
+    if (!activeUser) {
+      closeBookDetails()
+      setShowProfileModal(true)
+      return
+    }
+
+    const bookId = String(selectedBook.bookId || selectedBook.id || '')
+    if (!bookId) return
+
+    try {
+      setIsSavingShelf(true)
+      const response = await fetch('/api/shelves', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: activeUser,
+          bookId,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to remove book from shelf: status ${response.status}`)
+      }
+
+      setSavedShelf(false)
+      setUserShelvesByBookId((prev) => {
+        const next = { ...prev }
+        delete next[bookId]
+        return next
+      })
+    } catch (err) {
+      console.error('Error removing book from shelf:', err)
+    } finally {
+      setIsSavingShelf(false)
+    }
   }
 
   const shouldShowCarouselNavigation = Boolean(currentUserId || username)
@@ -580,7 +976,8 @@ function App() {
         body: JSON.stringify({
           displayName: trimmedName,
           csv: csvText,
-          userId: existingCookieUserId,
+          userId: existingCookieUserId || currentUserId,
+          authUserId: supabaseUser?.id || null,
         }),
         credentials: 'include',
       })
@@ -669,12 +1066,18 @@ function App() {
   }
 
   const handleOpenProfileModal = () => {
-    const activeCookieId = getUserIdFromCookie() || cookieUserId
+    const activeCookieId = cookieUserId || getUserIdFromCookie()
+    const userFallbackName =
+      supabaseUser?.user_metadata?.full_name ||
+      supabaseUser?.user_metadata?.display_name ||
+      supabaseUser?.email?.split('@')[0] ||
+      ''
+
     if (activeCookieId) {
       if (!cookieUserId) {
         setCookieUserId(activeCookieId)
       }
-      const prefillName = displayNameInput || username || ''
+      const prefillName = displayNameInput || userFallbackName || ''
       if (prefillName) {
         setDisplayNameInput(prefillName)
       }
@@ -686,17 +1089,11 @@ function App() {
           console.error(qrError)
           setQrCodeDataUrl('')
         })
+    } else if (userFallbackName && !displayNameInput) {
+      setDisplayNameInput(userFallbackName)
     }
     setUploadError('')
     setShowProfileModal(true)
-  }
-
-  const handleGoToGeneratedUrl = () => {
-    if (!generatedProfileUrl) {
-      return
-    }
-
-    window.open(generatedProfileUrl, '_blank', 'noopener,noreferrer')
   }
 
   const scrollBooks = (direction) => {
@@ -985,18 +1382,101 @@ function App() {
               </div>
 
               <div className="book-detail-content">
-                <div>
+                <div className="book-detail-cover-col">
                   <div className="book-detail-cover">
                     <img
                       src={
                         selectedBook.imageUrl && !selectedBook.imageUrl.includes('goodreads.com') && !selectedBook.imageUrl.includes('ssl-images-amazon.com')
                           ? selectedBook.imageUrl
-                          : selectedBook.isbn
-                            ? `https://covers.openlibrary.org/b/isbn/${String(selectedBook.isbn).replace(/[^0-9X]/gi, '').trim()}-L.jpg`
+                          : (selectedBook.isbn13 || selectedBook.isbn)
+                            ? `https://covers.openlibrary.org/b/isbn/${String(selectedBook.isbn13 || selectedBook.isbn).replace(/[^0-9X]/gi, '').trim()}-L.jpg`
                             : ''
                       }
                       alt={`${selectedBook.title} cover`}
                     />
+                  </div>
+
+                  <div className="book-detail-shelf-action" ref={shelfDropdownRef}>
+                    {!supabaseUser ? (
+                      <button
+                        type="button"
+                        className="book-shelf-login-prompt-btn"
+                        onClick={() => {
+                          closeBookDetails()
+                          setShowProfileModal(true)
+                        }}
+                      >
+                        <Bookmark size={15} />
+                        <span>Login to save</span>
+                      </button>
+                    ) : (!cookieUserId || cookieUserId !== currentUserId) ? (
+                      <>
+                        <div className={`book-shelf-dropdown-btn-group ${savedShelf ? 'saved' : ''}`}>
+                          <button
+                            type="button"
+                            className="book-shelf-main-btn"
+                            disabled={isSavingShelf}
+                            onClick={() => {
+                              if (savedShelf) {
+                                handleRemoveBookFromShelf()
+                              } else {
+                                handleSaveBookToShelf(targetShelf)
+                              }
+                            }}
+                            title={
+                              savedShelf
+                                ? `Elimină de pe raft (${getShelfLabel(targetShelf)})`
+                                : `Salvează pe raft: ${getShelfLabel(targetShelf)}`
+                            }
+                          >
+                            {savedShelf ? <Check size={16} /> : <Bookmark size={16} />}
+                            <span>
+                              {isSavingShelf
+                                ? (savedShelf ? 'Se elimină...' : 'Se salvează...')
+                                : (savedShelf
+                                  ? `Salvat: ${getShelfLabel(targetShelf)}`
+                                  : `Salvează: ${getShelfLabel(targetShelf)}`)}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className={`book-shelf-chevron-toggle-btn ${shelfDropdownOpen ? 'open' : ''}`}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setShelfDropdownOpen((prev) => !prev)
+                            }}
+                            aria-label="Alege raftul"
+                            title="Alege raftul"
+                          >
+                            <ChevronDown size={16} className={`chevron-icon ${shelfDropdownOpen ? 'open' : ''}`} />
+                          </button>
+                        </div>
+
+                        {shelfDropdownOpen && (
+                          <div className="book-shelf-options-menu" onClick={(e) => e.stopPropagation()}>
+                            {SHELF_OPTIONS.map((shelf) => (
+                              <button
+                                key={shelf.id}
+                                type="button"
+                                className={`book-shelf-option-item ${targetShelf === shelf.id && savedShelf ? 'active' : ''}`}
+                                onClick={() => {
+                                  setShelfDropdownOpen(false)
+                                  if (savedShelf && targetShelf === shelf.id) {
+                                    handleRemoveBookFromShelf()
+                                  } else {
+                                    setTargetShelf(shelf.id)
+                                    handleSaveBookToShelf(shelf.id)
+                                  }
+                                }}
+                              >
+                                <span>{shelf.label}</span>
+                                {targetShelf === shelf.id && savedShelf && <Check size={14} />}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    ) : null}
                   </div>
                 </div>
                 <div className="book-detail-body">
@@ -1021,6 +1501,18 @@ function App() {
                     </div>
                   </div>
 
+                  {loggedInUserBook?.myReview ? (
+                    <div className="book-detail-review-card">
+                      <span className="book-detail-label">Recenzia ta</span>
+                      <p className="book-detail-review-text">{loggedInUserBook.myReview}</p>
+                    </div>
+                  ) : selectedBook.review ? (
+                    <div className="book-detail-review-card">
+                      <span className="book-detail-label">Recenzie</span>
+                      <p className="book-detail-review-text">{selectedBook.review}</p>
+                    </div>
+                  ) : null}
+
                   <div className="book-detail-grid">
                   </div>
                 </div>
@@ -1033,7 +1525,25 @@ function App() {
           <div className="profile-modal-backdrop" onClick={() => setShowProfileModal(false)}>
             <div className="profile-modal" onClick={(event) => event.stopPropagation()}>
               <div className="profile-modal-header">
-                <div className="profile-modal-header-spacer" />
+                {supabaseUser ? (
+                  <div className="profile-modal-user-header">
+                    <div className="profile-user-badge profile-modal-label">
+                      <span className="profile-user-email">{supabaseUser.email}</span>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="profile-modal-logout-btn"
+                      onClick={handleSignOut}
+                      title="Deconectare din cont"
+                    >
+                      <LogOut size={14} />
+                      Deconectare
+                    </button>
+                  </div>
+                ) : (
+                  <div className="profile-modal-header-spacer" />
+                )}
                 <button
                   type="button"
                   className="toolbar-clear-button"
@@ -1044,85 +1554,124 @@ function App() {
                 </button>
               </div>
 
-              <form className="profile-modal-form" onSubmit={handleUploadCsvSubmit}>
-                <div className="profile-modal-field">
-                  <label htmlFor="profile-display-name-input" className="profile-modal-label">
-                    Numele afișat *
-                  </label>
-                  <input
-                    ref={nameInputRef}
-                    id="profile-display-name-input"
-                    type="text"
-                    required
-                    aria-required="true"
-                    pattern=".*\S.*"
-                    value={displayNameInput}
-                    onChange={(event) => {
-                      setDisplayNameInput(event.target.value)
-                      setUploadError('')
-                    }}
-                    placeholder="ex: Alin"
-                    className="profile-modal-input"
-                  />
-                </div>
+              {!supabaseUser ? (
+                <AuthModalView
+                  onSuccess={(user) => {
+                    setShowProfileModal(false)
+                    if (user) {
+                      setSupabaseUser(user)
+                      syncUserProfileWithServer(user, { hideModal: true })
+                    }
+                  }}
+                />
+              ) : (
+                <>
+                  <form className="profile-modal-form" onSubmit={handleUploadCsvSubmit}>
+                    <div className="profile-modal-field">
+                      <label htmlFor="profile-display-name-input" className="profile-modal-label">
+                        Numele tău
+                      </label>
+                      <div className="profile-name-input-wrapper">
+                        <input
+                          ref={nameInputRef}
+                          id="profile-display-name-input"
+                          type="text"
+                          required
+                          aria-required="true"
+                          pattern=".*\S.*"
+                          value={displayNameInput}
+                          onChange={(event) => {
+                            setDisplayNameInput(event.target.value)
+                            setUploadError('')
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault()
+                              handleSaveDisplayName()
+                            }
+                          }}
+                          placeholder="ex: Alin"
+                          className="profile-modal-input profile-modal-input-with-action"
+                        />
+                        <button
+                          type="button"
+                          className={`profile-name-save-icon-btn ${savedName ? 'saved' : ''}`}
+                          onClick={handleSaveDisplayName}
+                          disabled={isSavingName || !displayNameInput.trim()}
+                          aria-label="Salvează numele"
+                          title={savedName ? 'Salvat!' : 'Salvează numele'}
+                        >
+                          {savedName ? <Check size={16} /> : <Save size={16} />}
+                        </button>
+                      </div>
+                    </div>
 
-                <div className="profile-modal-field">
-                  <label htmlFor="profile-csv-input" className="profile-modal-label">
-                    Fișier CSV Goodreads
-                  </label>
-                  <label htmlFor="profile-csv-input" className="profile-file-upload">
-                    <Upload size={16} strokeWidth={2} aria-hidden="true" />
-                    <span className="profile-file-upload-text">
-                      {csvFile ? csvFile.name : 'Încarcă fișierul CSV exportat...'}
-                    </span>
-                  </label>
-                  <input
-                    id="profile-csv-input"
-                    type="file"
-                    accept=".csv,text/csv"
-                    onChange={handleCsvFileChange}
-                    className="profile-file-input-hidden"
-                  />
-                </div>
+                    <div className="profile-modal-field">
+                      <label htmlFor="profile-csv-input" className="profile-modal-label">
+                        Librărie Goodreads
+                      </label>
+                      <label htmlFor="profile-csv-input" className="profile-file-upload">
+                        <Upload size={16} strokeWidth={2} aria-hidden="true" />
+                        <span className="profile-file-upload-text">
+                          {csvFile ? csvFile.name : 'Încarcă fișierul CSV exportat...'}
+                        </span>
+                      </label>
+                      <input
+                        id="profile-csv-input"
+                        type="file"
+                        accept=".csv,text/csv"
+                        onChange={handleCsvFileChange}
+                        className="profile-file-input-hidden"
+                      />
+                    </div>
 
-                {uploadError ? <p className="profile-modal-error">{uploadError}</p> : null}
+                    {uploadError ? <p className="profile-modal-error">{uploadError}</p> : null}
 
-                <button
-                  type="submit"
-                  className="profile-modal-submit"
-                  disabled={isUploadingCsv || !displayNameInput.trim() || !csvFile}
-                >
-                  {isUploadingCsv
-                    ? 'Se încarcă...'
-                    : (cookieUserId ? 'Actualizează librăria' : 'Generează URL')}
-                </button>
-              </form>
+                    <button
+                      type="submit"
+                      className="profile-modal-submit"
+                      disabled={isUploadingCsv || !displayNameInput.trim() || !csvFile}
+                    >
+                      {isUploadingCsv
+                        ? 'Se încarcă...'
+                        : (cookieUserId ? 'Actualizează librăria' : 'Generează URL')}
+                    </button>
+                  </form>
 
-              {generatedProfileUrl ? (
-                <div className="profile-url-result">
-                  <label className="profile-modal-label">
-                    URL-ul tau pe 'Ce mai citim'
-                  </label>
-                  <div className="profile-url-field">
-                    <span>{generatedProfileUrl}</span>
-                  </div>
+                  {generatedProfileUrl ? (
+                    <div className="profile-url-result">
+                      <label className="profile-modal-label">
+                        URL-ul tău pe 'Ce mai citim'
+                      </label>
+                      <div className="profile-url-field">
+                        <a
+                          href={generatedProfileUrl}
+                          className="profile-url-text"
+                          onClick={() => setShowProfileModal(false)}
+                          title="Mergi la librăria ta"
+                        >
+                          {generatedProfileUrl}
+                        </a>
+                        <button
+                          type="button"
+                          className={`profile-url-copy-icon-btn ${copiedUrl ? 'copied' : ''}`}
+                          onClick={handleCopyGeneratedUrl}
+                          aria-label="Copiază linkul"
+                          title={copiedUrl ? 'Copiat!' : 'Copiază linkul'}
+                        >
+                          {copiedUrl ? <Check size={16} /> : <Copy size={16} />}
+                        </button>
+                      </div>
 
-                  {qrCodeDataUrl ? (
-                    <div className="profile-qr-wrapper">
-                      <img src={qrCodeDataUrl} alt="QR code for generated website URL" className="profile-qr-image" />
+                      {qrCodeDataUrl ? (
+                        <div className="profile-qr-wrapper">
+                          <img src={qrCodeDataUrl} alt="QR code for generated website URL" className="profile-qr-image" />
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
-
-                  <div className="profile-url-actions">
-                    <button type="button" className="profile-url-copy" onClick={handleCopyGeneratedUrl}>
-                      {copiedUrl ? 'Copiat!' : 'Copiaza'}
-                    </button>
-                    <button type="button" className="profile-url-go" onClick={handleGoToGeneratedUrl}>
-                      Mergi la profilul tau
-                    </button>
-                  </div>
-                </div>
-              ) : null}
+                </>
+              )}
             </div>
           </div>
         ) : null}
@@ -1217,11 +1766,15 @@ function App() {
                     !book.imageUrl?.includes('goodreads.com') &&
                     !book.imageUrl?.includes('ssl-images-amazon.com'))
 
+                const cleanIsbn13 = String(book.isbn13 || (book.isbn?.length === 13 ? book.isbn : '') || '').replace(/[^0-9X]/gi, '').trim()
+                const cleanIsbn10 = String(book.isbn10 || (book.isbn?.length === 10 ? book.isbn : '') || '').replace(/[^0-9X]/gi, '').trim()
+                const effectiveIsbn = cleanIsbn13 || cleanIsbn10 || String(book.isbn || '').replace(/[^0-9X]/gi, '').trim()
+
                 const safeCoverUrl =
                   book.imageUrl && !book.imageUrl.includes('goodreads.com') && !book.imageUrl.includes('ssl-images-amazon.com')
                     ? book.imageUrl
-                    : book.isbn
-                      ? `https://covers.openlibrary.org/b/isbn/${String(book.isbn).replace(/[^0-9X]/gi, '').trim()}-L.jpg`
+                    : effectiveIsbn
+                      ? `https://covers.openlibrary.org/b/isbn/${effectiveIsbn}-L.jpg`
                       : ''
 
                 return (
@@ -1305,28 +1858,30 @@ function App() {
 
         </section>
 
-        {cookieUserId ? (
-          <button
-            type="button"
-            className="profile-url-trigger-round"
-            onClick={handleOpenProfileModal}
-            aria-label="Profil și încărcare CSV"
-            title="Profil și încărcare CSV"
-          >
-            <UserRoundPen size={18} strokeWidth={2.2} />
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="profile-url-trigger"
-            onClick={handleOpenProfileModal}
-          >
-            <WandSparkles size={16} strokeWidth={2} />
-            Generează URL-ul tău
-          </button>
+        {!isCheckingAuth && (
+          supabaseUser ? (
+            <button
+              type="button"
+              className="profile-url-trigger-round"
+              onClick={handleOpenProfileModal}
+              aria-label="Profil și încărcare CSV"
+              title="Profil și încărcare CSV"
+            >
+              <UserRoundPen size={18} strokeWidth={2.2} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="profile-url-trigger"
+              onClick={handleOpenProfileModal}
+            >
+              <WandSparkles size={16} strokeWidth={2} />
+              Creează librăria ta
+            </button>
+          )
         )}
       </main>
-    </div>
+    </div >
   )
 }
 

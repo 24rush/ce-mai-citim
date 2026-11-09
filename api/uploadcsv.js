@@ -7,23 +7,32 @@ import {
   getUserIdFromCookie,
   normalizeCsvBook,
   parseCsvRows,
+  resolveBookIsbns,
 } from '../src/lib/goodreads.js'
 
-export const CSV_TO_DB_COLUMNS = [
+export const BOOK_DB_COLUMNS = [
   { csvHeader: 'Book Id', dbColumn: 'book_id', type: 'string' },
   { csvHeader: 'Title', dbColumn: 'title', type: 'string' },
   { csvHeader: 'Author', dbColumn: 'author', type: 'string' },
   { csvHeader: 'ISBN', dbColumn: 'isbn', type: 'string' },
-  { csvHeader: 'My Rating', dbColumn: 'my_rating', type: 'rating' },
   { csvHeader: 'Publisher', dbColumn: 'publisher', type: 'string' },
   { csvHeader: 'Binding', dbColumn: 'binding', type: 'string' },
   { csvHeader: 'Number of Pages', dbColumn: 'number_of_pages', type: 'int' },
   { csvHeader: 'Original Publication Year', dbColumn: 'original_publication_year', type: 'int' },
+]
+
+export const USER_SHELF_DB_COLUMNS = [
+  { csvHeader: 'Bookshelves', dbColumn: 'bookshelves', type: 'string' },
+  { csvHeader: 'My Rating', dbColumn: 'my_rating', type: 'rating' },
   { csvHeader: 'Date Read', dbColumn: 'date_read', type: 'date' },
   { csvHeader: 'Date Added', dbColumn: 'date_added', type: 'date' },
-  { csvHeader: 'Bookshelves', dbColumn: 'bookshelves', type: 'string' },
   { csvHeader: 'My Review', dbColumn: 'my_review', type: 'string' },
   { csvHeader: 'Spoiler', dbColumn: 'spoiler', type: 'boolean' },
+]
+
+export const CSV_TO_DB_COLUMNS = [
+  ...BOOK_DB_COLUMNS,
+  ...USER_SHELF_DB_COLUMNS,
 ]
 
 export const ALLOWED_SHELVES = new Set([
@@ -197,16 +206,46 @@ export const parseCsvForDatabase = (csvText = '') => {
       dbRow[col.dbColumn] = coerceColumnValue(rawCell, col.type)
     }
 
-    if (!dbRow.isbn) {
-      const isbn13ColIndex =
-        headerIndexMap.get('isbn13') ??
-        headerIndexMap.get('isbn 13') ??
-        headerIndexMap.get('isbn_13')
-      if (isbn13ColIndex !== undefined) {
-        const cleanedIsbn13 = cleanCsvValue(cells[isbn13ColIndex] ?? '')
-        if (cleanedIsbn13) {
-          dbRow.isbn = cleanedIsbn13
-          rawRecord['ISBN'] = cleanedIsbn13
+    const isbnColIndex = headerIndexMap.get('isbn')
+    const isbn13ColIndex =
+      headerIndexMap.get('isbn13') ??
+      headerIndexMap.get('isbn 13') ??
+      headerIndexMap.get('isbn_13')
+
+    const rawIsbn = isbnColIndex !== undefined ? cells[isbnColIndex] : ''
+    const rawIsbn13 = isbn13ColIndex !== undefined ? cells[isbn13ColIndex] : ''
+    const resolved = resolveBookIsbns({ isbn: rawIsbn, isbn13: rawIsbn13 })
+
+    dbRow.isbn = resolved.isbn || null
+    rawRecord['ISBN'] = resolved.isbn || ''
+    rawRecord['ISBN13'] = resolved.isbn13 || ''
+
+    // If Original Publication Year is missing/empty/0, check alternative year headers (e.g. 'Year Published')
+    if (!dbRow.original_publication_year || dbRow.original_publication_year <= 0) {
+      const yearPublishedIndex =
+        headerIndexMap.get('year published') ??
+        headerIndexMap.get('year_published') ??
+        headerIndexMap.get('yearpublished')
+      if (yearPublishedIndex !== undefined) {
+        const altYear = coerceColumnValue(cells[yearPublishedIndex], 'int')
+        if (altYear && altYear > 0) {
+          dbRow.original_publication_year = altYear
+          rawRecord['Original Publication Year'] = String(altYear)
+        }
+      }
+    }
+
+    // If Number of Pages is missing/empty/0, check alternative page headers (e.g. 'Pages', 'num_pages')
+    if (!dbRow.number_of_pages || dbRow.number_of_pages <= 0) {
+      const altPagesIndex =
+        headerIndexMap.get('pages') ??
+        headerIndexMap.get('num_pages') ??
+        headerIndexMap.get('number_of_pages')
+      if (altPagesIndex !== undefined) {
+        const altPages = coerceColumnValue(cells[altPagesIndex], 'int')
+        if (altPages && altPages > 0) {
+          dbRow.number_of_pages = altPages
+          rawRecord['Number of Pages'] = String(altPages)
         }
       }
     }
@@ -261,24 +300,36 @@ export const parseCsvForDatabase = (csvText = '') => {
   return { dbRows: [...dedupedRowsMap.values()], books }
 }
 
-export const upsertUserInDatabase = async ({ userId, displayName, queryFn }) => {
+export const upsertUserInDatabase = async ({ userId, displayName, authUserId, queryFn }) => {
   const executeQuery = queryFn || (await createDefaultDbQuery())
 
-  const sqlText = `
-    INSERT INTO users (user_id, display_name, last_access)
-    VALUES ($1, $2, NOW())
-    ON CONFLICT (user_id)
-    DO UPDATE SET
-      display_name = EXCLUDED.display_name,
-      last_access = NOW();
-  `.trim()
-
-  await executeQuery(sqlText, [userId, displayName])
+  if (authUserId) {
+    const sqlText = `
+      INSERT INTO users (user_id, display_name, auth_user_id, last_access)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (user_id)
+      DO UPDATE SET
+        display_name = EXCLUDED.display_name,
+        auth_user_id = COALESCE(EXCLUDED.auth_user_id, users.auth_user_id),
+        last_access = NOW();
+    `.trim()
+    await executeQuery(sqlText, [userId, displayName, authUserId])
+  } else {
+    const sqlText = `
+      INSERT INTO users (user_id, display_name, last_access)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (user_id)
+      DO UPDATE SET
+        display_name = EXCLUDED.display_name,
+        last_access = NOW();
+    `.trim()
+    await executeQuery(sqlText, [userId, displayName])
+  }
 }
 
 export const deleteUserBooksFromDatabase = async ({ userId, queryFn }) => {
   const executeQuery = queryFn || (await createDefaultDbQuery())
-  await executeQuery('DELETE FROM books WHERE user_id = $1', [userId])
+  await executeQuery('DELETE FROM user_shelves WHERE user_id = $1', [userId])
 }
 
 export const insertBooksIntoDatabase = async ({ userId, dbRows, queryFn }) => {
@@ -287,38 +338,72 @@ export const insertBooksIntoDatabase = async ({ userId, dbRows, queryFn }) => {
   }
 
   const executeQuery = queryFn || (await createDefaultDbQuery())
-  const dbColumnNames = CSV_TO_DB_COLUMNS.map((col) => col.dbColumn)
-  const allColumns = ['user_id', ...dbColumnNames]
 
-  const valuePlaceholders = []
-  const values = []
+  // 1. Insert or update canonical books in the books table
+  const bookColumnNames = BOOK_DB_COLUMNS.map((col) => col.dbColumn)
+  const bookPlaceholders = []
+  const bookValues = []
 
   dbRows.forEach((row) => {
-    const rowPlaceholders = allColumns.map((_, colIdx) => `$${values.length + colIdx + 1}`)
-    valuePlaceholders.push(`(${rowPlaceholders.join(', ')})`)
-
-    values.push(userId)
-    for (const colName of dbColumnNames) {
-      values.push(row[colName])
+    const rowPlaceholders = bookColumnNames.map((_, colIdx) => `$${bookValues.length + colIdx + 1}`)
+    bookPlaceholders.push(`(${rowPlaceholders.join(', ')})`)
+    for (const colName of bookColumnNames) {
+      bookValues.push(row[colName])
     }
   })
 
-  const updateAssignments = [
-    ...dbColumnNames
-      .filter((col) => col !== 'book_id')
-      .map((col) => `${col} = EXCLUDED.${col}`),
+  const bookUpdateAssignments = [
+    'title = EXCLUDED.title',
+    'author = EXCLUDED.author',
+    "isbn = COALESCE(NULLIF(EXCLUDED.isbn, ''), books.isbn)",
+    'publisher = EXCLUDED.publisher',
+    'binding = EXCLUDED.binding',
+    'number_of_pages = COALESCE(EXCLUDED.number_of_pages, books.number_of_pages)',
+    'original_publication_year = COALESCE(EXCLUDED.original_publication_year, books.original_publication_year)',
     'updated_at = NOW()',
   ]
 
-  const sqlText = `
-    INSERT INTO books (${allColumns.join(', ')})
-    VALUES ${valuePlaceholders.join(',\n           ')}
-    ON CONFLICT (user_id, book_id)
+  const booksSqlText = `
+    INSERT INTO books (${bookColumnNames.join(', ')})
+    VALUES ${bookPlaceholders.join(',\n           ')}
+    ON CONFLICT (book_id)
     DO UPDATE SET
-      ${updateAssignments.join(',\n      ')};
+      ${bookUpdateAssignments.join(',\n      ')};
   `.trim()
 
-  await executeQuery(sqlText, values)
+  await executeQuery(booksSqlText, bookValues)
+
+  // 2. Insert or update user shelf connections in the user_shelves table
+  const shelfDataColumns = USER_SHELF_DB_COLUMNS.map((col) => col.dbColumn)
+  const allShelfColumns = ['user_id', 'book_id', ...shelfDataColumns]
+  const shelfPlaceholders = []
+  const shelfValues = []
+
+  dbRows.forEach((row) => {
+    const rowPlaceholders = allShelfColumns.map((_, colIdx) => `$${shelfValues.length + colIdx + 1}`)
+    shelfPlaceholders.push(`(${rowPlaceholders.join(', ')})`)
+
+    shelfValues.push(userId)
+    shelfValues.push(row.book_id)
+    for (const colName of shelfDataColumns) {
+      shelfValues.push(row[colName])
+    }
+  })
+
+  const shelfUpdateAssignments = [
+    ...shelfDataColumns.map((col) => `${col} = EXCLUDED.${col}`),
+    'updated_at = NOW()',
+  ]
+
+  const shelfSqlText = `
+    INSERT INTO user_shelves (${allShelfColumns.join(', ')})
+    VALUES ${shelfPlaceholders.join(',\n           ')}
+    ON CONFLICT (user_id, book_id)
+    DO UPDATE SET
+      ${shelfUpdateAssignments.join(',\n      ')};
+  `.trim()
+
+  await executeQuery(shelfSqlText, shelfValues)
   return dbRows.length
 }
 
@@ -336,12 +421,20 @@ export const enrichMissingIsbns = async ({
   const targets = []
   dbRows.forEach((row, index) => {
     const rawIsbn = String(row.isbn || '').replace(/[^0-9X]/gi, '').trim()
-    if (rawIsbn.length < 8 && row.title) {
+    const missingIsbn = rawIsbn.length < 8
+    const missingPages = !row.number_of_pages || row.number_of_pages <= 0
+    const missingYear = !row.original_publication_year || row.original_publication_year <= 0
+
+    if ((missingIsbn || missingPages || missingYear) && (row.title || rawIsbn)) {
       targets.push({
         row,
         book: books[index],
         title: row.title,
         author: row.author || '',
+        isbn: rawIsbn,
+        missingIsbn,
+        missingPages,
+        missingYear,
       })
     }
   })
@@ -355,15 +448,19 @@ export const enrichMissingIsbns = async ({
   for (let i = 0; i < targets.length; i += CONCURRENCY) {
     const batch = targets.slice(i, i + CONCURRENCY)
     await Promise.all(
-      batch.map(async ({ row, book, title, author }) => {
+      batch.map(async ({ row, book, title, author, isbn, missingIsbn, missingPages, missingYear }) => {
         try {
           const result = await searchGoogleBooks({
             title,
             author,
+            isbn,
             apiKey,
             fetchFn,
           })
-          if (result?.isbn) {
+          if (!result) return
+
+          // 1. Fill missing ISBN if the csv does not contain it
+          if (missingIsbn && result.isbn) {
             row.isbn = result.isbn
             const resolvedCoverUrl =
               result.coverUrl ||
@@ -373,11 +470,54 @@ export const enrichMissingIsbns = async ({
               book.imageUrl = resolvedCoverUrl
             }
             if (result.coverUrl) {
-              discoveredCovers.push({ isbn: result.isbn, url: result.coverUrl })
+              const resIsbns = resolveBookIsbns({ isbn: result.isbn })
+              if (resIsbns.isbn13) discoveredCovers.push({ isbn: resIsbns.isbn13, url: result.coverUrl })
+              if (resIsbns.isbn10 && resIsbns.isbn10 !== resIsbns.isbn13) {
+                discoveredCovers.push({ isbn: resIsbns.isbn10, url: result.coverUrl })
+              }
+              if (!resIsbns.isbn13 && !resIsbns.isbn10) {
+                discoveredCovers.push({ isbn: result.isbn, url: result.coverUrl })
+              }
+            }
+          } else if (result.coverUrl && (!book?.imageUrl || book.imageUrl.includes('covers.openlibrary.org'))) {
+            if (book && !book.imageUrl) {
+              book.imageUrl = result.coverUrl
+            }
+            const cleanCurIsbn = String(row.isbn || result.isbn || '').replace(/[^0-9X]/gi, '').trim()
+            if (cleanCurIsbn) {
+              const resIsbns = resolveBookIsbns({ isbn: cleanCurIsbn })
+              if (resIsbns.isbn13) discoveredCovers.push({ isbn: resIsbns.isbn13, url: result.coverUrl })
+              if (resIsbns.isbn10 && resIsbns.isbn10 !== resIsbns.isbn13) {
+                discoveredCovers.push({ isbn: resIsbns.isbn10, url: result.coverUrl })
+              }
+            }
+          }
+
+          // 2. Fill missing publication year if the csv does not contain it
+          if (missingYear) {
+            const pubYear =
+              result.publishedYear ||
+              (result.publishedDate
+                ? Number.parseInt(String(result.publishedDate).match(/\b([12]\d{3})\b/)?.[1] || '', 10)
+                : null)
+            if (pubYear && pubYear > 0) {
+              row.original_publication_year = pubYear
+              if (book) {
+                book.publishedYear = pubYear
+              }
+            }
+          }
+
+          // 3. Fill missing number of pages if the csv does not contain it
+          if (missingPages && result.pageCount && result.pageCount > 0) {
+            row.number_of_pages = result.pageCount
+            if (book) {
+              book.pages = result.pageCount
+              book.thickness = Math.min(Math.max(Math.round(result.pageCount / 8), 18), 80)
             }
           }
         } catch (err) {
-          console.warn(`[uploadcsv] Failed to lookup ISBN for "${title}":`, err?.message)
+          console.warn(`[uploadcsv] Failed to lookup metadata for "${title}":`, err?.message)
         }
       }),
     )
@@ -395,6 +535,8 @@ export const enrichMissingIsbns = async ({
 
   return { dbRows, books, covers: discoveredCovers }
 }
+
+export const enrichMissingMetadata = enrichMissingIsbns
 
 const readRawStreamFirst = async (req) => {
   if (req && typeof req[Symbol.asyncIterator] === 'function' && !req.readableEnded) {
@@ -477,6 +619,7 @@ export const extractUploadPayload = async (req) => {
       displayName: String(req.body.displayName || req.query?.displayName || '').trim(),
       csvText: String(req.body.csv || req.body.file || ''),
       isNewUser: Boolean(req.body.isNewUser || req.query?.isNewUser),
+      authUserId: String(req.body.authUserId || req.query?.authUserId || '').trim() || null,
     }
   }
 
@@ -489,6 +632,7 @@ export const extractUploadPayload = async (req) => {
       displayName: String(fields.displayName || req.query?.displayName || '').trim(),
       csvText: String(fields.file || fields.csv || ''),
       isNewUser: Boolean(fields.isNewUser === 'true' || fields.isNewUser === true || req.query?.isNewUser),
+      authUserId: String(fields.authUserId || req.query?.authUserId || '').trim() || null,
     }
   }
 
@@ -499,6 +643,7 @@ export const extractUploadPayload = async (req) => {
       displayName: String(parsed.displayName || req.query?.displayName || '').trim(),
       csvText: String(parsed.csv || parsed.file || ''),
       isNewUser: Boolean(parsed.isNewUser || req.query?.isNewUser),
+      authUserId: String(parsed.authUserId || req.query?.authUserId || '').trim() || null,
     }
   }
 
@@ -507,6 +652,7 @@ export const extractUploadPayload = async (req) => {
     displayName: String(req.query?.displayName || '').trim(),
     csvText: rawBuffer.toString('utf8'),
     isNewUser: Boolean(req.query?.isNewUser),
+    authUserId: String(req.query?.authUserId || '').trim() || null,
   }
 }
 
@@ -527,7 +673,8 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { userId: rawUserId, displayName, csvText, isNewUser } = await extractUploadPayload(req)
+    const { userId: rawUserId, displayName, csvText, isNewUser, authUserId } =
+      await extractUploadPayload(req)
 
     if (!displayName) {
       console.warn('[uploadcsv] 400: Display name is missing')
@@ -569,6 +716,7 @@ export default async function handler(req, res) {
     await upsertUserInDatabase({
       userId,
       displayName,
+      authUserId,
       queryFn: executeQuery,
     })
     await deleteUserBooksFromDatabase({

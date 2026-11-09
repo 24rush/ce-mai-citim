@@ -1,4 +1,5 @@
 import { createDefaultDbQuery, ensureEnvLoaded } from './_lib/db.js'
+import { convertIsbn10To13, convertIsbn13To10 } from '../src/lib/goodreads.js'
 
 export const parseMultipartBuffer = (buffer, contentType = '') => {
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;\s]+))/i)
@@ -212,6 +213,16 @@ export default async function handler(req, res) {
     const executeQuery = req.dbQuery || (await createDefaultDbQuery())
 
     await executeQuery(UPSERT_COVER_SQL, [cleanIsbn, coverUrl])
+
+    const altIsbn =
+      cleanIsbn.length === 13 ? convertIsbn13To10(cleanIsbn) : convertIsbn10To13(cleanIsbn)
+    if (altIsbn && altIsbn !== cleanIsbn) {
+      try {
+        await executeQuery(UPSERT_COVER_SQL, [altIsbn, coverUrl])
+      } catch {
+        // Alt ISBN caching is best-effort
+      }
+    }
 
     return res.status(200).json({
       success: true,

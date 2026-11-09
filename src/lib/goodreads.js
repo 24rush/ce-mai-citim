@@ -45,6 +45,29 @@ export const extractGoodreadsUserId = (value) => {
   return candidate || ''
 }
 
+export const SHELF_IDS = ['read', 'to-read', 'currently-reading', 'did-not-finish']
+
+export const isRootPath = (pathname = '') => {
+  const normalized = String(pathname || '').trim().replace(/\/+$/, '')
+  return normalized === '' || normalized === '/'
+}
+
+export const getRouteStateFromPath = (pathname = typeof window !== 'undefined' ? window.location.pathname : '') => {
+  const segments = String(pathname || '').split('/').filter(Boolean)
+  const userSegment = segments[0] || ''
+  const shelfSegment = segments[1] || 'read'
+  const bookSegment = segments[2] || ''
+
+  const userId = extractGoodreadsUserId(userSegment)
+  const shelf = SHELF_IDS.includes(shelfSegment) ? shelfSegment : 'read'
+
+  return {
+    userId,
+    shelf,
+    bookId: bookSegment,
+  }
+}
+
 export const buildGoodreadsApiUrl = (value) => {
   const userId = extractGoodreadsUserId(value)
 
@@ -68,13 +91,105 @@ export const cleanCsvValue = (value) => {
     return ''
   }
 
-  const trimmed = String(value).trim()
-  const excelFormulaMatch = trimmed.match(/^="?(.*?)"?$/)
-  if (excelFormulaMatch) {
-    return excelFormulaMatch[1].trim()
+  let str = String(value).trim()
+
+  // Repeatedly strip leading = and enclosing quotes (e.g. ="=""164722215X""" or ="164722215X")
+  let prev
+  do {
+    prev = str
+    str = str.trim()
+    if (str.startsWith('=')) {
+      str = str.slice(1).trim()
+    }
+    if (
+      (str.startsWith('"') && str.endsWith('"') && str.length >= 2) ||
+      (str.startsWith("'") && str.endsWith("'") && str.length >= 2)
+    ) {
+      str = str.slice(1, -1).trim()
+    }
+  } while (str !== prev)
+
+  // Unescape CSV-escaped double quotes ("" -> ")
+  str = str.replace(/""/g, '"')
+
+  // If unescaping left outer quotes or leading =, clean once more
+  while (
+    (str.startsWith('"') && str.endsWith('"') && str.length >= 2) ||
+    str.startsWith('=')
+  ) {
+    if (str.startsWith('=')) {
+      str = str.slice(1).trim()
+    } else {
+      str = str.slice(1, -1).trim()
+    }
   }
 
-  return trimmed
+  if (/^"+$/.test(str)) {
+    return ''
+  }
+
+  return str.trim()
+}
+
+export const cleanIsbnValue = (val = '') => {
+  if (!val) return ''
+  const cleaned = cleanCsvValue(val)
+  return String(cleaned).replace(/[^0-9X]/gi, '').trim().toUpperCase()
+}
+
+export const convertIsbn10To13 = (isbn10 = '') => {
+  const clean = cleanIsbnValue(isbn10)
+  if (clean.length !== 10) return ''
+  const base = `978${clean.slice(0, 9)}`
+  let sum = 0
+  for (let i = 0; i < 12; i += 1) {
+    sum += Number.parseInt(base[i], 10) * (i % 2 === 0 ? 1 : 3)
+  }
+  const check = (10 - (sum % 10)) % 10
+  return `${base}${check}`
+}
+
+export const convertIsbn13To10 = (isbn13 = '') => {
+  const clean = cleanIsbnValue(isbn13)
+  if (clean.length !== 13 || !clean.startsWith('978')) return ''
+  const base = clean.slice(3, 12)
+  let sum = 0
+  for (let i = 0; i < 9; i += 1) {
+    sum += Number.parseInt(base[i], 10) * (10 - i)
+  }
+  const rem = (11 - (sum % 11)) % 11
+  const check = rem === 10 ? 'X' : String(rem)
+  return `${base}${check}`
+}
+
+export const resolveBookIsbns = ({ isbn = '', isbn13 = '' } = {}) => {
+  const clean1 = cleanIsbnValue(isbn)
+  const clean2 = cleanIsbnValue(isbn13)
+
+  let foundIsbn10 = ''
+  let foundIsbn13 = ''
+
+  if (clean1.length === 10) foundIsbn10 = clean1
+  else if (clean1.length === 13) foundIsbn13 = clean1
+
+  if (clean2.length === 13) foundIsbn13 = clean2
+  else if (clean2.length === 10 && !foundIsbn10) foundIsbn10 = clean2
+
+  if (foundIsbn10 && !foundIsbn13) {
+    foundIsbn13 = convertIsbn10To13(foundIsbn10)
+  }
+
+  if (foundIsbn13 && !foundIsbn10) {
+    foundIsbn10 = convertIsbn13To10(foundIsbn13)
+  }
+
+  const primaryIsbn = clean1 || clean2 || foundIsbn10 || foundIsbn13 || ''
+
+  return {
+    isbn: primaryIsbn,
+    isbn10: foundIsbn10,
+    isbn13: foundIsbn13,
+  }
 }
 
 export const parseCsvRows = (csvText = '') => {
@@ -147,7 +262,9 @@ export const normalizeCsvBook = (record = {}, index = 0) => {
   const bookId = cleanCsvValue(getField('Book Id', 'bookId', 'book_id', 'id'))
   const title = cleanCsvValue(getField('Title', 'title')) || `Book ${index + 1}`
   const author = cleanCsvValue(getField('Author', 'author', 'author_name'))
-  const isbn = cleanCsvValue(getField('ISBN', 'isbn', 'ISBN13', 'isbn13'))
+  const rawIsbn = getField('ISBN', 'isbn')
+  const rawIsbn13 = getField('ISBN13', 'isbn13', 'isbn 13', 'isbn_13')
+  const { isbn, isbn10, isbn13 } = resolveBookIsbns({ isbn: rawIsbn, isbn13: rawIsbn13 })
   const rawRating = cleanCsvValue(getField('My Rating', 'myRating', 'my_rating', 'rating', 'user_rating'))
   const publisher = cleanCsvValue(getField('Publisher', 'publisher'))
   const binding = cleanCsvValue(getField('Binding', 'binding'))
@@ -180,10 +297,13 @@ export const normalizeCsvBook = (record = {}, index = 0) => {
         : 35
 
   const resolvedId = bookId || `${title}-${index}`
-  const cleanIsbn = isbn ? String(isbn).replace(/[^0-9X]/gi, '').trim() : ''
-  const defaultCoverUrl = cleanIsbn
-    ? `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-L.jpg`
-    : ''
+  const defaultCoverUrl = isbn
+    ? `https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg`
+    : isbn13
+      ? `https://covers.openlibrary.org/b/isbn/${isbn13}-L.jpg`
+      : isbn10
+        ? `https://covers.openlibrary.org/b/isbn/${isbn10}-L.jpg`
+        : ''
   const rawImageUrl = cleanCsvValue(getField('imageUrl', 'image_url', 'coverUrl', 'cover_url'))
   const imageUrl =
     rawImageUrl && !rawImageUrl.includes('compressed.photo.goodreads.com') && !rawImageUrl.includes('ssl-images-amazon.com')
@@ -204,6 +324,8 @@ export const normalizeCsvBook = (record = {}, index = 0) => {
     title,
     author,
     isbn,
+    isbn10,
+    isbn13,
     rating: Number.isFinite(rating) ? Math.min(Math.max(rating, 0), 5) : 0,
     publisher,
     binding,

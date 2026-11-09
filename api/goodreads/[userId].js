@@ -13,22 +13,23 @@ export const USER_BOOKS_SQL = `
     b.title,
     b.author,
     b.isbn,
-    b.my_rating,
+    us.my_rating,
     b.publisher,
     b.binding,
     b.number_of_pages,
     b.original_publication_year,
-    TO_CHAR(b.date_read, 'YYYY/MM/DD') AS date_read,
-    TO_CHAR(b.date_added, 'YYYY/MM/DD') AS date_added,
-    b.bookshelves,
-    b.my_review,
-    b.spoiler,
+    TO_CHAR(us.date_read, 'YYYY/MM/DD') AS date_read,
+    TO_CHAR(us.date_added, 'YYYY/MM/DD') AS date_added,
+    us.bookshelves,
+    us.my_review,
+    us.spoiler,
     COALESCE(c.url, CASE WHEN b.isbn IS NOT NULL AND b.isbn <> '' THEN 'https://covers.openlibrary.org/b/isbn/' || b.isbn || '-L.jpg' ELSE '' END) AS cover_url
   FROM users u
-  LEFT JOIN books b ON b.user_id = u.user_id
+  LEFT JOIN user_shelves us ON us.user_id = u.user_id
+  LEFT JOIN books b ON b.book_id = us.book_id
   LEFT JOIN covers c ON c.isbn = b.isbn AND b.isbn IS NOT NULL AND b.isbn <> ''
   WHERE u.user_id = $1
-  ORDER BY b.date_read DESC NULLS LAST, b.date_added DESC NULLS LAST;
+  ORDER BY us.date_read DESC NULLS LAST, us.date_added DESC NULLS LAST;
 `.trim()
 
 export const mapRowToBook = (row, index) =>
