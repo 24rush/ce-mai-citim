@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import { BookCover } from 'book-cover-3d'
-import { ArrowUpDown, Bookmark, Check, ChevronDown, Copy, LogOut, Save, Upload, UserRoundPen, UserSearch, WandSparkles } from 'lucide-react'
+import { ArrowUpDown, Bookmark, Check, ChevronDown, Copy, LogOut, Save, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
 import {
   buildBookShareUrl,
   buildGoodreadsApiUrl,
@@ -151,7 +151,7 @@ function App() {
   const [error, setError] = useState('')
   const [pulledImagesCount, setPulledImagesCount] = useState(INITIAL_PULLED_IMAGES_COUNT)
   const carouselRef = useRef(null)
-  const dragState = useRef({ active: false, startX: 0, scrollLeft: 0 })
+  const dragState = useRef({ isDown: false, active: false, startX: 0, startY: 0, scrollLeft: 0 })
   const rafIdRef = useRef(null)
   const pointerDragRef = useRef({ startX: 0, startY: 0, hasMoved: false })
   const lastScrollTimeRef = useRef(0)
@@ -162,6 +162,33 @@ function App() {
   const isInitialRootUrlRef = useRef(
     typeof window !== 'undefined' && isRootPath(window.location.pathname),
   )
+
+  const [modalDragOffset, setModalDragOffset] = useState({ x: 0, y: 0 })
+  const [modalSwipeExit, setModalSwipeExit] = useState(null)
+  const [modalToast, setModalToast] = useState('')
+  const modalToastTimeoutRef = useRef(null)
+  const modalPointerRef = useRef({ startX: 0, startY: 0, isDragging: false, directionLocked: null })
+  const modalCardRef = useRef(null)
+
+  const isUserLoggedIn = useMemo(() => {
+    if (isSupabaseConfigured()) {
+      return Boolean(supabaseUser)
+    }
+    return Boolean(cookieUserId || getUserIdFromCookie())
+  }, [supabaseUser, cookieUserId])
+
+  const isOtherUserProfile = useMemo(() => {
+    if (!isUserLoggedIn) {
+      return true
+    }
+
+    const activeUser = cookieUserId || getUserIdFromCookie()
+    if (!activeUser || !currentUserId) {
+      return true
+    }
+
+    return String(activeUser) !== String(currentUserId)
+  }, [isUserLoggedIn, currentUserId, cookieUserId])
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768)
@@ -837,10 +864,33 @@ function App() {
     setError('')
   }
 
+  const handleHeaderClick = () => {
+    const loggedInId = cookieUserId || getUserIdFromCookie() || DEFAULT_USER_ID
+    if (!loggedInId) return
+
+    if (
+      currentUserId === loggedInId &&
+      !selectedBook &&
+      activeShelf === 'read' &&
+      activeAuthorFilter === 'all'
+    ) {
+      return
+    }
+
+    const nextPath = `/${loggedInId}`
+    window.history.pushState({}, '', nextPath)
+    setCurrentUserId(String(loggedInId))
+    setRequestedBookId('')
+    setSelectedBook(null)
+    setActiveShelf('read')
+    setActiveAuthorFilter('all')
+    setBooksFetchTrigger((prev) => prev + 1)
+  }
+
   const handleSaveBookToShelf = async (shelfToSave = targetShelf) => {
     if (!selectedBook) return
     const activeUser = cookieUserId || getUserIdFromCookie()
-    if (!activeUser) {
+    if (!isUserLoggedIn || !activeUser) {
       closeBookDetails()
       setShowProfileModal(true)
       return
@@ -900,7 +950,7 @@ function App() {
   const handleRemoveBookFromShelf = async () => {
     if (!selectedBook) return
     const activeUser = cookieUserId || getUserIdFromCookie()
-    if (!activeUser) {
+    if (!isUserLoggedIn || !activeUser) {
       closeBookDetails()
       setShowProfileModal(true)
       return
@@ -936,6 +986,228 @@ function App() {
       setIsSavingShelf(false)
     }
   }
+
+  const showModalToast = (msg) => {
+    if (modalToastTimeoutRef.current) clearTimeout(modalToastTimeoutRef.current)
+    setModalToast(msg)
+    modalToastTimeoutRef.current = setTimeout(() => setModalToast(''), 2200)
+  }
+
+  const handleJumpBook = (delta = 1, { saveToRead = false } = {}) => {
+    if (!books.length || !selectedBook) return
+    const curIdx = books.findIndex(
+      (b) => String(b.bookId || b.id) === String(selectedBook.bookId || selectedBook.id),
+    )
+    if (curIdx === -1) return
+
+    const bookToSave = selectedBook
+
+    if (saveToRead) {
+      const activeUser = cookieUserId || getUserIdFromCookie()
+      if (!isUserLoggedIn || !activeUser) {
+        closeBookDetails()
+        setShowProfileModal(true)
+        return
+      }
+
+      if (!cookieUserId || cookieUserId !== currentUserId) {
+        const bookId = String(bookToSave.bookId || bookToSave.id || '')
+        if (bookId) {
+          fetch('/api/shelves', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userId: activeUser,
+              bookId,
+              shelf: 'to-read',
+              book: {
+                bookId,
+                title: bookToSave.title,
+                author: bookToSave.author,
+                isbn: bookToSave.isbn,
+                pages: bookToSave.pages,
+                publishedYear: bookToSave.publishedYear,
+                publisher: bookToSave.publisher,
+                binding: bookToSave.binding,
+              },
+            }),
+          })
+            .then((res) => (res.ok ? res.json() : null))
+            .then((data) => {
+              if (data) {
+                const savedShelfName = data.shelf || 'to-read'
+                setUserShelvesByBookId((prev) => ({
+                  ...prev,
+                  [bookId]: {
+                    ...(prev[bookId] || {}),
+                    bookId,
+                    shelf: savedShelfName,
+                    title: bookToSave.title,
+                    author: bookToSave.author,
+                    isbn: bookToSave.isbn,
+                  },
+                }))
+                showModalToast('Salvat pe raftul De citit!')
+              }
+            })
+            .catch((err) => {
+              console.error('Error saving book on swipe right:', err)
+            })
+        }
+      }
+    }
+
+    const nextIndex = curIdx + delta
+    if (nextIndex >= books.length || nextIndex < 0) {
+      closeBookDetails()
+      return
+    }
+
+    const nextBook = books[nextIndex]
+    if (!nextBook) {
+      closeBookDetails()
+      return
+    }
+
+    const nextBookId = String(nextBook.bookId || nextBook.id)
+    const nextShelf = nextBook.bookshelves || activeShelf
+    window.history.replaceState({}, '', `/${currentUserId}/${nextShelf}/${encodeURIComponent(nextBookId)}`)
+    setRequestedBookId(nextBookId)
+    setSelectedBook(nextBook)
+    setShelfDropdownOpen(false)
+  }
+
+  const handleTriggerModalSwipe = (direction) => {
+    if (modalSwipeExit || !selectedBook) return
+
+    if (direction === 'right') {
+      const activeUser = cookieUserId || getUserIdFromCookie()
+      if (!isUserLoggedIn || !activeUser) {
+        setModalDragOffset({ x: 0, y: 0 })
+        setModalSwipeExit(null)
+        closeBookDetails()
+        setShowProfileModal(true)
+        return
+      }
+    }
+
+    setModalSwipeExit(direction)
+
+    const shouldSave = direction === 'right'
+
+    setTimeout(() => {
+      handleJumpBook(1, { saveToRead: shouldSave })
+      setModalDragOffset({ x: 0, y: 0 })
+      setModalSwipeExit(null)
+    }, 220)
+  }
+
+  const handleModalPointerDown = (event) => {
+    if (modalSwipeExit) return
+    if (event.button !== 0 && event.pointerType === 'mouse') return
+    if (event.target.closest('button, select, input, a, .book-shelf-options-menu, .book-detail-qr-box')) return
+
+    modalPointerRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      isDragging: true,
+      directionLocked: null,
+    }
+
+    if (modalCardRef.current && typeof modalCardRef.current.setPointerCapture === 'function') {
+      try {
+        modalCardRef.current.setPointerCapture(event.pointerId)
+      } catch {
+        // Fallback
+      }
+    }
+  }
+
+  const handleModalPointerMove = (event) => {
+    if (!modalPointerRef.current.isDragging || modalSwipeExit) return
+    const dx = event.clientX - modalPointerRef.current.startX
+    const dy = event.clientY - modalPointerRef.current.startY
+
+    if (!modalPointerRef.current.directionLocked) {
+      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+        modalPointerRef.current.directionLocked = 'horizontal'
+      } else if (Math.abs(dy) > 8) {
+        modalPointerRef.current.directionLocked = 'vertical'
+      }
+    }
+
+    if (modalPointerRef.current.directionLocked === 'horizontal') {
+      setModalDragOffset({ x: dx, y: dy * 0.15 })
+    }
+  }
+
+  const handleModalPointerUp = (event) => {
+    if (!modalPointerRef.current.isDragging) return
+    modalPointerRef.current.isDragging = false
+
+    if (modalCardRef.current && typeof modalCardRef.current.releasePointerCapture === 'function') {
+      try {
+        modalCardRef.current.releasePointerCapture(event.pointerId)
+      } catch {
+        // Fallback
+      }
+    }
+
+    if (modalPointerRef.current.directionLocked === 'horizontal') {
+      const dx = modalDragOffset.x
+      if (dx > 75) {
+        handleTriggerModalSwipe('right')
+      } else if (dx < -75) {
+        handleTriggerModalSwipe('left')
+      } else {
+        setModalDragOffset({ x: 0, y: 0 })
+      }
+    }
+
+    modalPointerRef.current.directionLocked = null
+  }
+
+  useEffect(() => {
+    if (!selectedBook) return undefined
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        closeBookDetails()
+        return
+      }
+
+      if (!isOtherUserProfile) return
+
+      if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        handleTriggerModalSwipe('right')
+      } else if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        handleTriggerModalSwipe('left')
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [selectedBook, isOtherUserProfile, books, modalSwipeExit, cookieUserId, currentUserId, supabaseUser])
+
+  const modalRotation = useMemo(() => {
+    if (modalSwipeExit === 'right') return 16
+    if (modalSwipeExit === 'left') return -16
+    return Math.max(-14, Math.min(14, modalDragOffset.x * 0.04))
+  }, [modalDragOffset.x, modalSwipeExit])
+
+  const modalRightStampOpacity = useMemo(() => {
+    if (modalSwipeExit === 'right') return 1
+    if (modalSwipeExit === 'left') return 0
+    return Math.max(0, Math.min(1, modalDragOffset.x / 75))
+  }, [modalDragOffset.x, modalSwipeExit])
+
+  const modalLeftStampOpacity = useMemo(() => {
+    if (modalSwipeExit === 'left') return 1
+    if (modalSwipeExit === 'right') return 0
+    return Math.max(0, Math.min(1, -modalDragOffset.x / 75))
+  }, [modalDragOffset.x, modalSwipeExit])
 
   const shouldShowCarouselNavigation = Boolean(currentUserId || username)
 
@@ -1124,11 +1396,7 @@ function App() {
       hasMoved: false,
     }
 
-    if (!carouselRef.current) {
-      return
-    }
-
-    if (event.pointerType === 'touch') {
+    if (!carouselRef.current || event.pointerType === 'touch') {
       return
     }
 
@@ -1138,48 +1406,68 @@ function App() {
     }
 
     dragState.current = {
-      active: true,
+      isDown: true,
+      active: false,
+      pointerId: event.pointerId,
       startX: event.clientX,
+      startY: event.clientY,
       scrollLeft: carouselRef.current.scrollLeft,
     }
-
-    event.currentTarget.setPointerCapture(event.pointerId)
   }
 
   const handlePointerMove = (event) => {
-    const deltaX = Math.abs(event.clientX - pointerDragRef.current.startX)
-    const deltaY = Math.abs(event.clientY - pointerDragRef.current.startY)
-    if (deltaX > 8 || deltaY > 8) {
-      pointerDragRef.current.hasMoved = true
+    if (!dragState.current.isDown || event.pointerType === 'touch') {
+      return
     }
 
-    if (!dragState.current.active || !carouselRef.current || event.pointerType === 'touch') {
+    const deltaX = event.clientX - dragState.current.startX
+    const deltaY = event.clientY - dragState.current.startY
+
+    if (!dragState.current.active) {
+      if (Math.hypot(deltaX, deltaY) > 6) {
+        dragState.current.active = true
+        pointerDragRef.current.hasMoved = true
+        if (typeof event.currentTarget?.setPointerCapture === 'function') {
+          try {
+            event.currentTarget.setPointerCapture(event.pointerId)
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+
+    if (!dragState.current.active || !carouselRef.current) {
       return
     }
 
     event.preventDefault()
-
-    const delta = event.clientX - dragState.current.startX
-    carouselRef.current.scrollLeft = dragState.current.scrollLeft - delta
+    carouselRef.current.scrollLeft = dragState.current.scrollLeft - deltaX
   }
 
   const handlePointerUp = (event) => {
-    if (!carouselRef.current || event.pointerType === 'touch') {
-      return
+    if (dragState.current.active && typeof event.currentTarget?.hasPointerCapture === 'function') {
+      if (typeof event.pointerId === 'number' && event.currentTarget.hasPointerCapture(event.pointerId)) {
+        try {
+          event.currentTarget.releasePointerCapture(event.pointerId)
+        } catch {
+          // ignore
+        }
+      }
     }
 
-    if (event && typeof event.pointerId === 'number' && event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
+    dragState.current = {
+      isDown: false,
+      active: false,
+      pointerId: null,
+      startX: 0,
+      startY: 0,
+      scrollLeft: 0,
     }
-
-    dragState.current.active = false
   }
 
   const handleBookTap = (book) => {
-    if (pointerDragRef.current.hasMoved) {
-      return
-    }
-    if (Date.now() - lastScrollTimeRef.current < 150) {
+    if (dragState.current.active || pointerDragRef.current.hasMoved) {
       return
     }
     openBookDetails(book)
@@ -1254,7 +1542,9 @@ function App() {
 
     const handleScroll = () => {
       lastScrollTimeRef.current = Date.now()
-      pointerDragRef.current.hasMoved = true
+      if (dragState.current.active) {
+        pointerDragRef.current.hasMoved = true
+      }
       syncBookCoverFocus()
       updatePulledCount()
     }
@@ -1302,7 +1592,19 @@ function App() {
 
       <main className="app-shell" style={{ position: 'relative', zIndex: 1 }}>
         <header className="library-header">
-          <div className="library-header-row">
+          <div
+            className="library-header-row"
+            onClick={handleHeaderClick}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                handleHeaderClick()
+              }
+            }}
+            role="button"
+            tabIndex={0}
+            title="Mergi la pagina ta principală"
+          >
             {username ? (
               <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
                 Ce mai citește <span className="text-violet-300">{username}</span>
@@ -1356,7 +1658,64 @@ function App() {
 
         {selectedBook ? (
           <div className="book-detail-backdrop" onClick={closeBookDetails}>
-            <div className="book-detail-modal" onClick={(event) => event.stopPropagation()}>
+            <div
+              ref={isOtherUserProfile ? modalCardRef : undefined}
+              className={`book-detail-modal ${
+                isOtherUserProfile
+                  ? `swipable ${modalPointerRef.current?.isDragging ? 'is-dragging' : ''} ${
+                      modalSwipeExit ? `modal-fly-out-${modalSwipeExit}` : ''
+                    }`
+                  : ''
+              }`}
+              style={
+                isOtherUserProfile
+                  ? {
+                      transform: modalSwipeExit
+                        ? undefined
+                        : `translate3d(${modalDragOffset.x}px, ${modalDragOffset.y}px, 0) rotate(${modalRotation}deg)`,
+                      transition: modalPointerRef.current?.isDragging
+                        ? 'none'
+                        : 'transform 0.28s cubic-bezier(0.18, 0.89, 0.32, 1.15)',
+                    }
+                  : undefined
+              }
+              onPointerDown={isOtherUserProfile ? handleModalPointerDown : undefined}
+              onPointerMove={isOtherUserProfile ? handleModalPointerMove : undefined}
+              onPointerUp={isOtherUserProfile ? handleModalPointerUp : undefined}
+              onPointerCancel={isOtherUserProfile ? handleModalPointerUp : undefined}
+              onClick={(event) => event.stopPropagation()}
+            >
+              {/* Swipe Left & Right Overlay Stamps (Other user's books only) */}
+              {isOtherUserProfile && (
+                <>
+                  <div
+                    className="book-modal-stamp book-modal-stamp-right"
+                    style={{ opacity: modalRightStampOpacity }}
+                    aria-hidden="true"
+                  >
+                    <Bookmark size={18} strokeWidth={2.8} />
+                    <span>SALVEAZĂ</span>
+                  </div>
+
+                  <div
+                    className="book-modal-stamp book-modal-stamp-left"
+                    style={{ opacity: modalLeftStampOpacity }}
+                    aria-hidden="true"
+                  >
+                    <X size={20} strokeWidth={3} />
+                    <span>SARI</span>
+                  </div>
+
+                  {/* Toast Feedback */}
+                  {modalToast && (
+                    <div className="book-modal-toast" role="status" aria-live="polite">
+                      <Check size={14} />
+                      <span>{modalToast}</span>
+                    </div>
+                  )}
+                </>
+              )}
+
               <div className="book-detail-header">
                 <div className="profile-modal-header-spacer" />
                 <button

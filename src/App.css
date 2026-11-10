@@ -35,6 +35,17 @@
   flex-direction: column;
   align-items: center;
   justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.library-header-row:hover {
+  opacity: 0.9;
+}
+
+.library-header-row:active {
+  transform: scale(0.99);
 }
 
 .reading-summary {
@@ -134,7 +145,7 @@
   align-content: start;
   padding-top: 70px;
   padding-bottom: 30px;
-  background: rgba(10, 15, 30, 0.28);
+  background: rgba(10, 15, 30, 0.48);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   z-index: 30;
@@ -1515,5 +1526,105 @@
     width: 36px;
     height: 36px;
     flex-shrink: 0;
+  }
+}
+
+/* ==========================================================================
+   Book Modal Swipe & Counter Styles
+   ========================================================================== */
+
+.book-detail-modal.swipable {
+  touch-action: pan-y;
+  will-change: transform, opacity;
+  cursor: grab;
+}
+
+.book-detail-modal.swipable.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.book-modal-stamp {
+  position: absolute;
+  top: 60px;
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 18px;
+  border-radius: 12px;
+  font-weight: 800;
+  font-size: 1.15rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  pointer-events: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  transition: opacity 0.1s ease;
+}
+
+.book-modal-stamp-right {
+  left: 24px;
+  transform: rotate(-12deg);
+  border: 3px solid #10b981;
+  background: rgba(16, 185, 129, 0.25);
+  color: #34d399;
+  text-shadow: 0 0 10px rgba(16, 185, 129, 0.6);
+  box-shadow: 0 0 25px rgba(16, 185, 129, 0.35);
+}
+
+.book-modal-stamp-left {
+  right: 24px;
+  transform: rotate(12deg);
+  border: 3px solid #f43f5e;
+  background: rgba(244, 63, 94, 0.25);
+  color: #fb7185;
+  text-shadow: 0 0 10px rgba(244, 63, 94, 0.6);
+  box-shadow: 0 0 25px rgba(244, 63, 94, 0.35);
+}
+
+.modal-fly-out-right {
+  transform: translate3d(100vw, 0, 0) rotate(22deg) !important;
+  opacity: 0 !important;
+  transition: transform 0.24s cubic-bezier(0.4, 0, 1, 1), opacity 0.22s !important;
+}
+
+.modal-fly-out-left {
+  transform: translate3d(-100vw, 0, 0) rotate(-22deg) !important;
+  opacity: 0 !important;
+  transition: transform 0.24s cubic-bezier(0.4, 0, 1, 1), opacity 0.22s !important;
+}
+
+.book-modal-toast {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 35;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 16px;
+  border-radius: 9999px;
+  background: rgba(16, 185, 129, 0.28);
+  border: 1px solid rgba(16, 185, 129, 0.65);
+  color: #a7f3d0;
+  font-size: 0.84rem;
+  font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 0 20px rgba(16, 185, 129, 0.3);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: modalToastFadeIn 0.2s ease-out;
+  pointer-events: none;
+}
+
+@keyframes modalToastFadeIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
   }
 }
