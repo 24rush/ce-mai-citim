@@ -25,6 +25,8 @@ CREATE TABLE books (
   binding VARCHAR(100),
   number_of_pages INTEGER,
   original_publication_year SMALLINT,
+  description VARCHAR(500),
+  main_category TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

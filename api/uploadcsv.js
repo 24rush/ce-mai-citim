@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { createDefaultDbQuery } from './_lib/db.js'
-import { getGoogleBooksApiKey, searchGoogleBooks, upsertCoverInDb } from './isbn.js'
+import { cleanIsbn, getGoogleBooksApiKey, searchGoogleBooks, upsertCoverInDb } from './isbn.js'
 import {
   USER_ID_COOKIE_NAME,
   cleanCsvValue,
@@ -10,7 +10,7 @@ import {
   resolveBookIsbns,
 } from '../src/lib/goodreads.js'
 
-export const BOOK_DB_COLUMNS = [
+export const CSV_BOOK_COLUMNS = [
   { csvHeader: 'Book Id', dbColumn: 'book_id', type: 'string' },
   { csvHeader: 'Title', dbColumn: 'title', type: 'string' },
   { csvHeader: 'Author', dbColumn: 'author', type: 'string' },
@@ -31,8 +31,14 @@ export const USER_SHELF_DB_COLUMNS = [
 ]
 
 export const CSV_TO_DB_COLUMNS = [
-  ...BOOK_DB_COLUMNS,
+  ...CSV_BOOK_COLUMNS,
   ...USER_SHELF_DB_COLUMNS,
+]
+
+export const BOOK_DB_COLUMNS = [
+  ...CSV_BOOK_COLUMNS,
+  { dbColumn: 'description', type: 'string' },
+  { dbColumn: 'main_category', type: 'string' },
 ]
 
 export const ALLOWED_SHELVES = new Set([
@@ -206,6 +212,9 @@ export const parseCsvForDatabase = (csvText = '') => {
       dbRow[col.dbColumn] = coerceColumnValue(rawCell, col.type)
     }
 
+    dbRow.description = null
+    dbRow.main_category = null
+
     const isbnColIndex = headerIndexMap.get('isbn')
     const isbn13ColIndex =
       headerIndexMap.get('isbn13') ??
@@ -360,6 +369,8 @@ export const insertBooksIntoDatabase = async ({ userId, dbRows, queryFn }) => {
     'binding = EXCLUDED.binding',
     'number_of_pages = COALESCE(EXCLUDED.number_of_pages, books.number_of_pages)',
     'original_publication_year = COALESCE(EXCLUDED.original_publication_year, books.original_publication_year)',
+    "description = COALESCE(NULLIF(EXCLUDED.description, ''), books.description)",
+    "main_category = COALESCE(NULLIF(EXCLUDED.main_category, ''), books.main_category)",
     'updated_at = NOW()',
   ]
 
@@ -418,15 +429,18 @@ export const enrichMissingIsbns = async ({
     return { dbRows, books }
   }
 
-  const targets = []
+  const candidateRows = []
   dbRows.forEach((row, index) => {
     const rawIsbn = String(row.isbn || '').replace(/[^0-9X]/gi, '').trim()
     const missingIsbn = rawIsbn.length < 8
     const missingPages = !row.number_of_pages || row.number_of_pages <= 0
     const missingYear = !row.original_publication_year || row.original_publication_year <= 0
+    const missingDescription = !row.description
+    const missingCategory = !row.main_category
 
-    if ((missingIsbn || missingPages || missingYear) && (row.title || rawIsbn)) {
-      targets.push({
+    // Call Google Books for every book to fill in description and mainCategory
+    if (row.title || rawIsbn) {
+      candidateRows.push({
         row,
         book: books[index],
         title: row.title,
@@ -435,15 +449,192 @@ export const enrichMissingIsbns = async ({
         missingIsbn,
         missingPages,
         missingYear,
+        missingDescription,
+        missingCategory,
       })
     }
   })
 
-  if (targets.length === 0) {
+  if (candidateRows.length === 0) {
     return { dbRows, books }
   }
 
   const discoveredCovers = []
+
+  // Check which candidate books are already in the database inserted from other users
+  const existingByBookId = new Map()
+  const existingByIsbn = new Map()
+  const existingByTitleAuthor = new Map()
+
+  if (queryFn) {
+    const candidateBookIds = [
+      ...new Set(candidateRows.map((c) => String(c.row.book_id || '').trim()).filter(Boolean)),
+    ]
+    const candidateIsbns = [
+      ...new Set(
+        candidateRows.flatMap((c) => {
+          const raw = String(c.row.isbn || '').replace(/[^0-9X]/gi, '').trim()
+          if (!raw) return []
+          const res = resolveBookIsbns({ isbn: raw })
+          return [raw, res.isbn13, res.isbn10].filter(Boolean)
+        }),
+      ),
+    ]
+    const candidateTitles = [
+      ...new Set(
+        candidateRows
+          .map((c) => String(c.row.title || '').trim().toLowerCase())
+          .filter((t) => t.length > 2),
+      ),
+    ]
+
+    if (candidateBookIds.length > 0 || candidateIsbns.length > 0 || candidateTitles.length > 0) {
+      try {
+        const sqlText = `
+          SELECT
+            b.book_id,
+            b.title,
+            b.author,
+            b.isbn,
+            b.number_of_pages,
+            b.original_publication_year,
+            b.description,
+            b.main_category,
+            c.url AS cover_url
+          FROM books b
+          LEFT JOIN covers c ON c.isbn = b.isbn AND b.isbn IS NOT NULL AND b.isbn <> ''
+          WHERE b.book_id = ANY($1)
+             OR (b.isbn IS NOT NULL AND b.isbn <> '' AND b.isbn = ANY($2))
+             OR (LOWER(TRIM(b.title)) = ANY($3))
+        `.trim()
+
+        const res = await queryFn(sqlText, [
+          candidateBookIds.length ? candidateBookIds : ['__none__'],
+          candidateIsbns.length ? candidateIsbns : ['__none__'],
+          candidateTitles.length ? candidateTitles : ['__none__'],
+        ])
+        const existingRows = Array.isArray(res) ? res : []
+
+        for (const b of existingRows) {
+          if (b.book_id) {
+            existingByBookId.set(String(b.book_id).trim(), b)
+          }
+          const clean = cleanIsbn(b.isbn)
+          if (clean) {
+            existingByIsbn.set(clean, b)
+            const res = resolveBookIsbns({ isbn: clean })
+            if (res.isbn13) existingByIsbn.set(res.isbn13, b)
+            if (res.isbn10) existingByIsbn.set(res.isbn10, b)
+          }
+          if (b.title) {
+            const key = `${String(b.title).trim().toLowerCase()}:::${String(b.author || '').trim().toLowerCase()}`
+            if (!existingByTitleAuthor.has(key)) {
+              existingByTitleAuthor.set(key, b)
+            }
+          }
+        }
+      } catch (dbErr) {
+        console.warn('[uploadcsv] Failed to check existing books in database:', dbErr?.message)
+      }
+    }
+  }
+
+  // Filter targets: only query Google for books that are NOT already in the database
+  const targets = []
+  for (const candidate of candidateRows) {
+    const { row, book, title, author, isbn: rawIsbn, missingIsbn, missingPages, missingYear } = candidate
+    const cleanCurIsbn = cleanIsbn(rawIsbn)
+    const titleAuthorKey = `${String(title || '').trim().toLowerCase()}:::${String(author || '').trim().toLowerCase()}`
+
+    const existingDbBook =
+      (row.book_id && existingByBookId.get(String(row.book_id).trim())) ||
+      (cleanCurIsbn && existingByIsbn.get(cleanCurIsbn)) ||
+      (titleAuthorKey && existingByTitleAuthor.get(titleAuthorKey)) ||
+      null
+
+    if (existingDbBook) {
+      // The book is ALREADY in the database inserted from other users!
+      // Enrich missing fields directly from the database:
+      if (missingIsbn && existingDbBook.isbn) {
+        row.isbn = existingDbBook.isbn
+        if (book) {
+          book.isbn = existingDbBook.isbn
+          const resIsbns = resolveBookIsbns({ isbn: existingDbBook.isbn })
+          if (resIsbns.isbn13) book.isbn13 = resIsbns.isbn13
+          if (resIsbns.isbn10) book.isbn10 = resIsbns.isbn10
+        }
+      }
+
+      if (missingPages && existingDbBook.number_of_pages && existingDbBook.number_of_pages > 0) {
+        row.number_of_pages = existingDbBook.number_of_pages
+        if (book) {
+          book.pages = existingDbBook.number_of_pages
+          book.thickness = Math.min(Math.max(Math.round(existingDbBook.number_of_pages / 8), 18), 80)
+        }
+      }
+
+      if (existingDbBook.original_publication_year && existingDbBook.original_publication_year > 0) {
+        row.original_publication_year = existingDbBook.original_publication_year
+        if (book) {
+          book.publishedYear = existingDbBook.original_publication_year
+        }
+      }
+
+      if (existingDbBook.description) {
+        const truncatedDesc = String(existingDbBook.description).trim().slice(0, 500)
+        row.description = truncatedDesc
+        if (book) {
+          book.description = truncatedDesc
+        }
+      }
+
+      if (existingDbBook.main_category) {
+        row.main_category = existingDbBook.main_category
+        if (book) {
+          book.mainCategory = existingDbBook.main_category
+        }
+      }
+
+      if (existingDbBook.cover_url) {
+        if (book) {
+          book.imageUrl = existingDbBook.cover_url
+        }
+        const candidateIsbns = [row.isbn, existingDbBook.isbn, book?.isbn, book?.isbn13, book?.isbn10].filter(Boolean)
+        for (const cand of candidateIsbns) {
+          const res = resolveBookIsbns({ isbn: cand })
+          if (res.isbn13) discoveredCovers.push({ isbn: res.isbn13, url: existingDbBook.cover_url })
+          if (res.isbn10) discoveredCovers.push({ isbn: res.isbn10, url: existingDbBook.cover_url })
+          if (!res.isbn13 && !res.isbn10 && cand) {
+            discoveredCovers.push({ isbn: cand, url: existingDbBook.cover_url })
+          }
+        }
+      }
+
+      // Skip querying Google Books because this book is already in the database
+      continue
+    }
+
+    targets.push(candidate)
+  }
+
+  if (targets.length === 0) {
+    if (discoveredCovers.length > 0 && queryFn) {
+      const seenCovers = new Set()
+      for (const { isbn: coverIsbn, url } of discoveredCovers) {
+        const clean = cleanIsbn(coverIsbn)
+        const key = `${clean}_${url}`
+        if (clean && url && !seenCovers.has(key)) {
+          seenCovers.add(key)
+          try {
+            await upsertCoverInDb({ isbn: clean, url, queryFn })
+          } catch (coverErr) {
+            console.warn(`[uploadcsv] Failed to save cover for ISBN ${clean}:`, coverErr?.message)
+          }
+        }
+      }
+    }
+    return { dbRows, books, covers: discoveredCovers }
+  }
   const CONCURRENCY = 5
   for (let i = 0; i < targets.length; i += CONCURRENCY) {
     const batch = targets.slice(i, i + CONCURRENCY)
@@ -462,35 +653,39 @@ export const enrichMissingIsbns = async ({
           // 1. Fill missing ISBN if the csv does not contain it
           if (missingIsbn && result.isbn) {
             row.isbn = result.isbn
-            const resolvedCoverUrl =
-              result.coverUrl ||
-              `https://covers.openlibrary.org/b/isbn/${result.isbn}-L.jpg`
             if (book) {
               book.isbn = result.isbn
-              book.imageUrl = resolvedCoverUrl
+              const resolvedIsbns = resolveBookIsbns({ isbn: result.isbn })
+              if (resolvedIsbns.isbn13) book.isbn13 = resolvedIsbns.isbn13
+              if (resolvedIsbns.isbn10) book.isbn10 = resolvedIsbns.isbn10
             }
-            if (result.coverUrl) {
-              const resIsbns = resolveBookIsbns({ isbn: result.isbn })
-              if (resIsbns.isbn13) discoveredCovers.push({ isbn: resIsbns.isbn13, url: result.coverUrl })
-              if (resIsbns.isbn10 && resIsbns.isbn10 !== resIsbns.isbn13) {
-                discoveredCovers.push({ isbn: resIsbns.isbn10, url: result.coverUrl })
+          }
+
+          // Pick up the Google Books cover directly and do NOT fall back on Open Library!
+          const foundCoverUrl = result.coverUrl || result.imageUrl || null
+          if (foundCoverUrl) {
+            if (book) {
+              book.imageUrl = foundCoverUrl
+            }
+            const candidateIsbns = [
+              row.isbn,
+              result.isbn,
+              book?.isbn,
+              book?.isbn13,
+              book?.isbn10,
+              isbn,
+            ].filter(Boolean)
+
+            for (const cand of candidateIsbns) {
+              const resIsbns = resolveBookIsbns({ isbn: cand })
+              if (resIsbns.isbn13) discoveredCovers.push({ isbn: resIsbns.isbn13, url: foundCoverUrl })
+              if (resIsbns.isbn10) discoveredCovers.push({ isbn: resIsbns.isbn10, url: foundCoverUrl })
+              if (!resIsbns.isbn13 && !resIsbns.isbn10 && cand) {
+                discoveredCovers.push({ isbn: cand, url: foundCoverUrl })
               }
-              if (!resIsbns.isbn13 && !resIsbns.isbn10) {
-                discoveredCovers.push({ isbn: result.isbn, url: result.coverUrl })
-              }
             }
-          } else if (result.coverUrl && (!book?.imageUrl || book.imageUrl.includes('covers.openlibrary.org'))) {
-            if (book && !book.imageUrl) {
-              book.imageUrl = result.coverUrl
-            }
-            const cleanCurIsbn = String(row.isbn || result.isbn || '').replace(/[^0-9X]/gi, '').trim()
-            if (cleanCurIsbn) {
-              const resIsbns = resolveBookIsbns({ isbn: cleanCurIsbn })
-              if (resIsbns.isbn13) discoveredCovers.push({ isbn: resIsbns.isbn13, url: result.coverUrl })
-              if (resIsbns.isbn10 && resIsbns.isbn10 !== resIsbns.isbn13) {
-                discoveredCovers.push({ isbn: resIsbns.isbn10, url: result.coverUrl })
-              }
-            }
+          } else if (missingIsbn && result.isbn && book && (!book.imageUrl || book.imageUrl.includes('covers.openlibrary.org'))) {
+            book.imageUrl = `https://covers.openlibrary.org/b/isbn/${result.isbn}-L.jpg`
           }
 
           // 2. Fill missing publication year if the csv does not contain it
@@ -516,6 +711,23 @@ export const enrichMissingIsbns = async ({
               book.thickness = Math.min(Math.max(Math.round(result.pageCount / 8), 18), 80)
             }
           }
+
+          // 4. Fill description from Google Books if available (limit to 500 chars)
+          if (result.description) {
+            const truncatedDesc = String(result.description).trim().slice(0, 500)
+            row.description = truncatedDesc
+            if (book) {
+              book.description = truncatedDesc
+            }
+          }
+
+          // 5. Fill mainCategory from Google Books if available
+          if (result.mainCategory) {
+            row.main_category = result.mainCategory
+            if (book) {
+              book.mainCategory = result.mainCategory
+            }
+          }
         } catch (err) {
           console.warn(`[uploadcsv] Failed to lookup metadata for "${title}":`, err?.message)
         }
@@ -524,11 +736,17 @@ export const enrichMissingIsbns = async ({
   }
 
   if (discoveredCovers.length > 0 && queryFn) {
-    for (const { isbn, url } of discoveredCovers) {
-      try {
-        await upsertCoverInDb({ isbn, url, queryFn })
-      } catch (coverErr) {
-        console.warn(`[uploadcsv] Failed to save cover for ISBN ${isbn}:`, coverErr?.message)
+    const seenCovers = new Set()
+    for (const { isbn: coverIsbn, url } of discoveredCovers) {
+      const clean = cleanIsbn(coverIsbn)
+      const key = `${clean}_${url}`
+      if (clean && url && !seenCovers.has(key)) {
+        seenCovers.add(key)
+        try {
+          await upsertCoverInDb({ isbn: clean, url, queryFn })
+        } catch (coverErr) {
+          console.warn(`[uploadcsv] Failed to save cover for ISBN ${clean}:`, coverErr?.message)
+        }
       }
     }
   }

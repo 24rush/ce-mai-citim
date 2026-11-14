@@ -284,6 +284,10 @@ export const normalizeCsvBook = (record = {}, index = 0) => {
   const review = cleanCsvValue(getField('My Review', 'myReview', 'my_review', 'review'))
   const rawSpoiler = cleanCsvValue(getField('Spoiler', 'spoiler'))
   const rawAverageRating = cleanCsvValue(getField('Average Rating', 'averageRating', 'average_rating'))
+  // description and mainCategory will only come from google books / DB properties, not CSV
+  const rawDescription = cleanCsvValue(record.description)
+  const description = rawDescription.length > 500 ? rawDescription.slice(0, 500) : rawDescription
+  const mainCategory = cleanCsvValue(record.mainCategory || record.main_category)
 
   const rating = Number.parseFloat(rawRating || '0')
   const pages = Number.parseInt(rawPages || '0', 10)
@@ -339,6 +343,8 @@ export const normalizeCsvBook = (record = {}, index = 0) => {
     review,
     spoiler,
     averageRating: Number.isFinite(averageRating) ? averageRating : 0,
+    description: description || '',
+    mainCategory: mainCategory || '',
     imageUrl,
     link,
   }

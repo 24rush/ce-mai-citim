@@ -116,10 +116,66 @@ export const extractPageCountFromVolume = (item) => {
   return null
 }
 
-export const buildSearchResult = (topItem, defaultIsbn, defaultTitle, defaultAuthor) => {
+export const extractDescriptionFromVolume = (item) => {
+  const desc = item?.volumeInfo?.description
+  if (!desc || typeof desc !== 'string') return null
+  const cleaned = desc.trim()
+  if (!cleaned) return null
+  return cleaned.length > 500 ? cleaned.slice(0, 500) : cleaned
+}
+
+export const extractMainCategoryFromVolume = (item) => {
+  const mainCat = item?.volumeInfo?.mainCategory
+  if (mainCat && typeof mainCat === 'string' && mainCat.trim()) {
+    return mainCat.trim()
+  }
+  const categories = item?.volumeInfo?.categories
+  if (Array.isArray(categories) && categories.length > 0) {
+    const firstCat = categories[0]
+    if (typeof firstCat === 'string' && firstCat.trim()) {
+      return firstCat.trim()
+    }
+  }
+  return null
+}
+
+export const buildSearchResult = (topItem, defaultIsbn, defaultTitle, defaultAuthor, allItems = []) => {
   if (!topItem) return null
   const resolvedIsbn = defaultIsbn || extractIsbnFromVolume(topItem) || null
-  const coverUrl = extractCoverFromVolume(topItem)
+  let coverUrl = extractCoverFromVolume(topItem)
+
+  if (!coverUrl && Array.isArray(allItems)) {
+    for (const item of allItems) {
+      const candidateCover = extractCoverFromVolume(item)
+      if (candidateCover) {
+        coverUrl = candidateCover
+        break
+      }
+    }
+  }
+
+  let description = extractDescriptionFromVolume(topItem)
+  if (!description && Array.isArray(allItems)) {
+    for (const item of allItems) {
+      const candidateDesc = extractDescriptionFromVolume(item)
+      if (candidateDesc) {
+        description = candidateDesc
+        break
+      }
+    }
+  }
+
+  let mainCategory = extractMainCategoryFromVolume(topItem)
+  if (!mainCategory && Array.isArray(allItems)) {
+    for (const item of allItems) {
+      const candidateCat = extractMainCategoryFromVolume(item)
+      if (candidateCat) {
+        mainCategory = candidateCat
+        break
+      }
+    }
+  }
+
   const publishedDate = topItem?.volumeInfo?.publishedDate || null
   const publishedYear = extractPublishedYearFromVolume(topItem)
   const pageCount = extractPageCountFromVolume(topItem)
@@ -134,6 +190,8 @@ export const buildSearchResult = (topItem, defaultIsbn, defaultTitle, defaultAut
     publishedDate,
     publishedYear,
     pageCount,
+    description,
+    mainCategory,
   }
 }
 
@@ -151,19 +209,26 @@ export const searchGoogleBooks = async ({
 
   const keyParam = apiKey ? `&key=${encodeURIComponent(apiKey)}` : ''
 
+  let partialResult = null
+
   // 1. If ISBN is provided, try exact ISBN query first
   if (cleanProvidedIsbn) {
     try {
       const isbnUrl = `https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(
         cleanProvidedIsbn,
-      )}&maxResults=1&printType=books${keyParam}`
+      )}&maxResults=5&printType=books${keyParam}`
       const res = await fetchFn(isbnUrl)
       if (res.ok) {
         const data = await res.json()
-        const topItem = data?.items?.[0]
+        const items = data?.items || []
+        const topItem = items[0]
         if (topItem) {
           const isbn = extractIsbnFromVolume(topItem) || cleanProvidedIsbn
-          return buildSearchResult(topItem, isbn, cleanTitle, cleanAuthor)
+          const result = buildSearchResult(topItem, isbn, cleanTitle, cleanAuthor, items)
+          if (result?.coverUrl || !cleanTitle) {
+            return result
+          }
+          partialResult = result
         }
       }
     } catch {
@@ -181,12 +246,31 @@ export const searchGoogleBooks = async ({
       const res = await fetchFn(primaryUrl)
       if (res.ok) {
         const data = await res.json()
-        const isbn = extractBestIsbnFromItems(data?.items)
-        if (isbn || data?.items?.length > 0) {
+        const items = data?.items || []
+        const isbn = extractBestIsbnFromItems(items)
+        if (isbn || items.length > 0) {
           const topItem =
-            (isbn && data.items.find((item) => extractIsbnFromVolume(item) === isbn)) ||
-            data.items[0]
-          return buildSearchResult(topItem, isbn, cleanTitle, cleanAuthor)
+            (isbn && items.find((item) => extractIsbnFromVolume(item) === isbn)) ||
+            items[0]
+          const result = buildSearchResult(topItem, isbn || partialResult?.isbn, cleanTitle, cleanAuthor, items)
+          if (partialResult) {
+            return {
+              ...partialResult,
+              ...result,
+              isbn: partialResult.isbn || result.isbn,
+              coverUrl: result.coverUrl || partialResult.coverUrl,
+              imageUrl: result.coverUrl || partialResult.coverUrl,
+              thumbnail: result.coverUrl || partialResult.coverUrl,
+              publishedYear: partialResult.publishedYear || result.publishedYear,
+              pageCount: partialResult.pageCount || result.pageCount,
+              description: result.description || partialResult.description,
+              mainCategory: result.mainCategory || partialResult.mainCategory,
+            }
+          }
+          if (result?.coverUrl || !cleanTitle) {
+            return result
+          }
+          partialResult = result
         }
       }
     } catch {
@@ -204,13 +288,28 @@ export const searchGoogleBooks = async ({
       const fallbackRes = await fetchFn(fallbackUrl)
       if (fallbackRes.ok) {
         const fallbackData = await fallbackRes.json()
-        const fallbackIsbn = extractBestIsbnFromItems(fallbackData?.items)
-        if (fallbackIsbn || fallbackData?.items?.length > 0) {
+        const items = fallbackData?.items || []
+        const fallbackIsbn = extractBestIsbnFromItems(items)
+        if (fallbackIsbn || items.length > 0) {
           const topItem =
-            (fallbackIsbn &&
-              fallbackData.items.find((item) => extractIsbnFromVolume(item) === fallbackIsbn)) ||
-            fallbackData.items[0]
-          return buildSearchResult(topItem, fallbackIsbn, cleanTitle, cleanAuthor)
+            (fallbackIsbn && items.find((item) => extractIsbnFromVolume(item) === fallbackIsbn)) ||
+            items[0]
+          const result = buildSearchResult(topItem, fallbackIsbn || partialResult?.isbn, cleanTitle, cleanAuthor, items)
+          if (partialResult) {
+            return {
+              ...partialResult,
+              ...result,
+              isbn: partialResult.isbn || result.isbn,
+              coverUrl: result.coverUrl || partialResult.coverUrl,
+              imageUrl: result.coverUrl || partialResult.coverUrl,
+              thumbnail: result.coverUrl || partialResult.coverUrl,
+              publishedYear: partialResult.publishedYear || result.publishedYear,
+              pageCount: partialResult.pageCount || result.pageCount,
+              description: result.description || partialResult.description,
+              mainCategory: result.mainCategory || partialResult.mainCategory,
+            }
+          }
+          return result
         }
       }
     } catch {
@@ -218,7 +317,7 @@ export const searchGoogleBooks = async ({
     }
   }
 
-  return null
+  return partialResult
 }
 
 export const updateBookIsbnInDb = async ({ userId: _userId, bookId, isbn, queryFn }) => {

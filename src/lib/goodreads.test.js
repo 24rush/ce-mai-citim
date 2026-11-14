@@ -25,6 +25,8 @@ import isbnHandler, {
   extractIsbnFromVolume,
   extractPublishedYearFromVolume,
   extractPageCountFromVolume,
+  extractDescriptionFromVolume,
+  extractMainCategoryFromVolume,
   searchGoogleBooks,
 } from '../../api/isbn.js'
 import profileHandler from '../../api/profile.js'
@@ -67,6 +69,8 @@ test('get books endpoint joins covers and returns all shelves', async () => {
           my_rating: 4,
           number_of_pages: 675,
           original_publication_year: 2007,
+          description: 'A great biography of Albert Einstein',
+          main_category: 'Biography & Autobiography',
           date_read: '2026/10/10',
           date_added: '2026/10/09',
           bookshelves: 'read',
@@ -109,6 +113,8 @@ test('get books endpoint joins covers and returns all shelves', async () => {
   assert.equal(res.payload.books.length, 3)
   assert.equal(res.payload.books[0].imageUrl, 'https://blob.vercel-storage.com/covers/0743264738.jpg')
   assert.equal(res.payload.books[0].pages, 675)
+  assert.equal(res.payload.books[0].description, 'A great biography of Albert Einstein')
+  assert.equal(res.payload.books[0].mainCategory, 'Biography & Autobiography')
   assert.equal(typeof res.payload.books[0].bookshelves, 'string')
   assert.equal(res.payload.books[0].bookshelves, 'read')
   assert.equal(res.payload.books[0].hasBookshelvesField, undefined)
@@ -342,18 +348,21 @@ test('uploadcsv lambda handler parses multipart form-data CSV and returns parsed
   assert.equal(jsonPayload.books[0].title, 'Einstein: His Life and Universe')
   assert.equal(jsonPayload.books[0].pages, 675)
 
-  assert.equal(req.capturedQueries.length, 4)
-  assert.match(req.capturedQueries[0].sqlText, /INSERT INTO users \(user_id, display_name, last_access\)/)
-  assert.deepEqual(req.capturedQueries[0].values, [jsonPayload.userId, 'Alin'])
+  const insertUserQuery = req.capturedQueries.find((q) => q.sqlText.includes('INSERT INTO users'))
+  assert.ok(insertUserQuery)
+  assert.deepEqual(insertUserQuery.values, [jsonPayload.userId, 'Alin'])
 
-  assert.match(req.capturedQueries[1].sqlText, /DELETE FROM user_shelves WHERE user_id = \$1/)
-  assert.deepEqual(req.capturedQueries[1].values, [jsonPayload.userId])
+  const deleteShelvesQuery = req.capturedQueries.find((q) => q.sqlText.includes('DELETE FROM user_shelves'))
+  assert.ok(deleteShelvesQuery)
+  assert.deepEqual(deleteShelvesQuery.values, [jsonPayload.userId])
 
+  const insertBookQuery = req.capturedQueries.find((q) => q.sqlText.includes('INSERT INTO books'))
+  assert.ok(insertBookQuery)
   assert.match(
-    req.capturedQueries[2].sqlText,
-    /INSERT INTO books \(book_id, title, author, isbn, publisher, binding, number_of_pages, original_publication_year\)/,
+    insertBookQuery.sqlText,
+    /INSERT INTO books \(book_id, title, author, isbn, publisher, binding, number_of_pages, original_publication_year, description, main_category\)/,
   )
-  assert.deepEqual(req.capturedQueries[2].values, [
+  assert.deepEqual(insertBookQuery.values, [
     '10884',
     'Einstein: His Life and Universe',
     'Walter Isaacson',
@@ -362,13 +371,13 @@ test('uploadcsv lambda handler parses multipart form-data CSV and returns parsed
     'Hardcover',
     675,
     2007,
+    null,
+    null,
   ])
 
-  assert.match(
-    req.capturedQueries[3].sqlText,
-    /INSERT INTO user_shelves \(user_id, book_id, bookshelves, my_rating, date_read, date_added, my_review, spoiler\)/,
-  )
-  assert.deepEqual(req.capturedQueries[3].values, [
+  const insertShelfQuery = req.capturedQueries.find((q) => q.sqlText.includes('INSERT INTO user_shelves'))
+  assert.ok(insertShelfQuery)
+  assert.deepEqual(insertShelfQuery.values, [
     jsonPayload.userId,
     '10884',
     'read',
@@ -406,14 +415,16 @@ test('uploadcsv lambda handler parses multipart form-data CSV and returns parsed
 
   await uploadCsvHandler(secondReq, secondRes)
   assert.equal(secondPayload.userId, jsonPayload.userId)
-  assert.equal(secondReq.capturedQueries.length, 4)
-  assert.match(secondReq.capturedQueries[0].sqlText, /INSERT INTO users/)
-  assert.deepEqual(secondReq.capturedQueries[0].values, [jsonPayload.userId, 'Alin'])
-  assert.match(secondReq.capturedQueries[1].sqlText, /DELETE FROM user_shelves WHERE user_id = \$1/)
-  assert.deepEqual(secondReq.capturedQueries[1].values, [jsonPayload.userId])
-  assert.match(secondReq.capturedQueries[2].sqlText, /INSERT INTO books/)
-  assert.match(secondReq.capturedQueries[3].sqlText, /INSERT INTO user_shelves/)
-  assert.equal(secondReq.capturedQueries[3].values[0], jsonPayload.userId)
+  const secondInsertUser = secondReq.capturedQueries.find((q) => q.sqlText.includes('INSERT INTO users'))
+  assert.ok(secondInsertUser)
+  assert.deepEqual(secondInsertUser.values, [jsonPayload.userId, 'Alin'])
+  const secondDeleteShelves = secondReq.capturedQueries.find((q) => q.sqlText.includes('DELETE FROM user_shelves'))
+  assert.ok(secondDeleteShelves)
+  assert.deepEqual(secondDeleteShelves.values, [jsonPayload.userId])
+  assert.ok(secondReq.capturedQueries.some((q) => q.sqlText.includes('INSERT INTO books')))
+  const secondInsertShelf = secondReq.capturedQueries.find((q) => q.sqlText.includes('INSERT INTO user_shelves'))
+  assert.ok(secondInsertShelf)
+  assert.equal(secondInsertShelf.values[0], jsonPayload.userId)
 
   // Third upload with isNewUser: true generates a fresh userId even with existing cookie
   const thirdReq = {
@@ -1552,12 +1563,17 @@ test('uploadcsv fills in publication year and number of pages when CSV does not 
   assert.equal(returnedBook.publishedYear, 2005)
   assert.equal(returnedBook.pages, 207)
   assert.equal(returnedBook.thickness, 26) // Math.round(207 / 8) = 26
+  assert.equal(returnedBook.imageUrl, 'https://books.google.com/theroad.jpg')
 
   // Verify database insertion for books table contains number_of_pages = 207 and original_publication_year = 2005
   const insertBookQuery = capturedQueries.find((q) => q.sqlText.includes('INSERT INTO books'))
   assert.ok(insertBookQuery)
   assert.ok(insertBookQuery.values.includes(207), 'DB insert values should include number_of_pages: 207')
   assert.ok(insertBookQuery.values.includes(2005), 'DB insert values should include original_publication_year: 2005')
+
+  const insertCoverQuery = capturedQueries.find((q) => q.sqlText.includes('INSERT INTO covers'))
+  assert.ok(insertCoverQuery, 'Should insert cover into covers table')
+  assert.ok(insertCoverQuery.values.includes('https://books.google.com/theroad.jpg'))
 })
 
 test('uploadcsv does NOT overwrite publication year or number of pages if CSV already contains them', async () => {
@@ -1635,3 +1651,579 @@ test('uploadcsv uses Year Published when Original Publication Year is empty in C
   assert.equal(dbRows[0].original_publication_year, 2019)
   assert.equal(books[0].publishedYear, 2019)
 })
+
+test('uploadcsv picks up Google Books cover and does not fall back on Open Library when called for metadata', async () => {
+  const csv = [
+    'Book Id,Title,Author,ISBN,My Rating,Publisher,Binding,Number of Pages,Original Publication Year,Date Read,Date Added,Bookshelves,Bookshelves with positions,My Review,Spoiler',
+    '101,Meditations,Marcus Aurelius,9780140449334,5,Penguin,Paperback,,180,2023/01/01,2023/01/01,read,,,false',
+  ].join('\n')
+
+  const capturedQueries = []
+  const mockDbQuery = async (sqlText, values) => {
+    capturedQueries.push({ sqlText, values })
+    return []
+  }
+
+  const mockFetch = async () => ({
+    ok: true,
+    async json() {
+      return {
+        items: [
+          {
+            volumeInfo: {
+              title: 'Meditations',
+              authors: ['Marcus Aurelius'],
+              publishedDate: '2006-04-27',
+              pageCount: 304,
+              industryIdentifiers: [
+                { type: 'ISBN_13', identifier: '9780140449334' },
+              ],
+              imageLinks: {
+                thumbnail: 'https://books.google.com/meditations.jpg&edge=curl',
+              },
+            },
+          },
+        ],
+      }
+    },
+  })
+
+  const req = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: {
+      displayName: 'Philosopher',
+      csv,
+    },
+    googleBooksApiKey: 'mock-key',
+    fetchFn: mockFetch,
+    dbQuery: mockDbQuery,
+  }
+  const res = createMockRes()
+
+  await uploadCsvHandler(req, res)
+
+  assert.equal(res.statusCode, 200)
+  const book = res.payload.books[0]
+  assert.equal(book.imageUrl, 'https://books.google.com/meditations.jpg')
+  assert.ok(!book.imageUrl.includes('openlibrary.org'), 'Must NOT fall back on Open Library when Google Books has a cover')
+
+  const insertCover = capturedQueries.find((q) => q.sqlText.includes('INSERT INTO covers'))
+  assert.ok(insertCover, 'Should save discovered cover to DB')
+  assert.ok(insertCover.values.includes('https://books.google.com/meditations.jpg'))
+})
+
+test('searchGoogleBooks continues to title search to find cover if exact ISBN volume lacks cover', async () => {
+  const calls = []
+  const mockFetch = async (url) => {
+    calls.push(url)
+    if (url.includes('q=isbn:')) {
+      // First call by ISBN has no imageLinks
+      return {
+        ok: true,
+        async json() {
+          return {
+            items: [
+              {
+                volumeInfo: {
+                  title: 'Dune',
+                  authors: ['Frank Herbert'],
+                  industryIdentifiers: [{ type: 'ISBN_13', identifier: '9780441172719' }],
+                  pageCount: 658,
+                },
+              },
+            ],
+          }
+        },
+      }
+    }
+
+    // Subsequent search by title has imageLinks
+    return {
+      ok: true,
+      async json() {
+        return {
+          items: [
+            {
+              volumeInfo: {
+                title: 'Dune',
+                authors: ['Frank Herbert'],
+                industryIdentifiers: [{ type: 'ISBN_13', identifier: '9780441172719' }],
+                imageLinks: {
+                  thumbnail: 'http://books.google.com/dune_cover.jpg',
+                },
+              },
+            },
+          ],
+        }
+      },
+    }
+  }
+
+  const result = await searchGoogleBooks({
+    title: 'Dune',
+    author: 'Frank Herbert',
+    isbn: '9780441172719',
+    fetchFn: mockFetch,
+  })
+
+  assert.ok(result)
+  assert.equal(result.coverUrl, 'https://books.google.com/dune_cover.jpg')
+  assert.equal(result.pageCount, 658)
+  assert.ok(calls.length >= 2, 'Should have continued to title search to pick up the cover')
+})
+
+test('uploadcsv queries Google only for books that are not already in the database from other users', async () => {
+  const csv = [
+    'Book Id,Title,Author,ISBN,My Rating,Publisher,Binding,Number of Pages,Original Publication Year,Date Read,Date Added,Bookshelves,Bookshelves with positions,My Review,Spoiler',
+    '101,Existing Book,Known Author,,5,PublisherA,Paperback,,,2023/01/01,2023/01/01,read,,,false',
+    '202,New Book,Fresh Author,,4,PublisherB,Paperback,,,2023/01/02,2023/01/02,read,,,false',
+  ].join('\n')
+
+  const googleCalls = []
+  const mockFetch = async (url) => {
+    googleCalls.push(url)
+    return {
+      ok: true,
+      async json() {
+        return {
+          items: [
+            {
+              volumeInfo: {
+                title: 'New Book',
+                authors: ['Fresh Author'],
+                publishedDate: '2021-05-10',
+                pageCount: 310,
+                industryIdentifiers: [{ type: 'ISBN_13', identifier: '9789999999999' }],
+                imageLinks: { thumbnail: 'https://books.google.com/new_book.jpg' },
+              },
+            },
+          ],
+        }
+      },
+    }
+  }
+
+  const capturedQueries = []
+  const mockDbQuery = async (sqlText, values) => {
+    capturedQueries.push({ sqlText, values })
+    // When checking for existing books in DB, return '101' as already in DB
+    if (sqlText.includes('FROM books b') && sqlText.includes('WHERE b.book_id = ANY')) {
+      return [
+        {
+          book_id: '101',
+          title: 'Existing Book',
+          author: 'Known Author',
+          isbn: '9780123456789',
+          number_of_pages: 420,
+          original_publication_year: 2018,
+          cover_url: 'https://covers.database.com/existing_book.jpg',
+        },
+      ]
+    }
+    return []
+  }
+
+  const req = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: {
+      displayName: 'Collector',
+      csv,
+    },
+    googleBooksApiKey: 'mock-key',
+    fetchFn: mockFetch,
+    dbQuery: mockDbQuery,
+  }
+  const res = createMockRes()
+
+  await uploadCsvHandler(req, res)
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.payload.books.length, 2)
+
+  // Book 1 (Existing Book) was populated from DB
+  const book1 = res.payload.books.find((b) => b.bookId === '101')
+  assert.ok(book1)
+  assert.equal(book1.isbn, '9780123456789')
+  assert.equal(book1.pages, 420)
+  assert.equal(book1.publishedYear, 2018)
+  assert.equal(book1.imageUrl, 'https://covers.database.com/existing_book.jpg')
+
+  // Book 2 (New Book) was populated from Google Books
+  const book2 = res.payload.books.find((b) => b.bookId === '202')
+  assert.ok(book2)
+  assert.equal(book2.isbn, '9789999999999')
+  assert.equal(book2.pages, 310)
+  assert.equal(book2.publishedYear, 2021)
+  assert.equal(book2.imageUrl, 'https://books.google.com/new_book.jpg')
+
+  // Google Books API must ONLY have been queried for the book not in DB (New Book), NEVER for Existing Book!
+  assert.ok(googleCalls.length > 0, 'Google should be called for new books')
+  for (const callUrl of googleCalls) {
+    assert.ok(!callUrl.includes('Existing'), 'Google should NOT be called for existing books')
+    assert.ok(!callUrl.includes('Known'), 'Google should NOT be called for known authors')
+  }
+})
+
+test('extractDescriptionFromVolume and extractMainCategoryFromVolume correctly parse Google volume info', () => {
+  assert.equal(
+    extractDescriptionFromVolume({
+      volumeInfo: { description: '  An epic post-apocalyptic journey.  ' },
+    }),
+    'An epic post-apocalyptic journey.',
+  )
+  assert.equal(
+    extractDescriptionFromVolume({
+      volumeInfo: { description: 'A'.repeat(600) },
+    }),
+    'A'.repeat(500),
+  )
+  assert.equal(extractDescriptionFromVolume(null), null)
+  assert.equal(extractDescriptionFromVolume({ volumeInfo: {} }), null)
+
+  assert.equal(
+    extractMainCategoryFromVolume({
+      volumeInfo: { mainCategory: 'Fiction' },
+    }),
+    'Fiction',
+  )
+  assert.equal(
+    extractMainCategoryFromVolume({
+      volumeInfo: { categories: ['Science Fiction & Fantasy', 'Adventure'] },
+    }),
+    'Science Fiction & Fantasy',
+  )
+  assert.equal(extractMainCategoryFromVolume(null), null)
+})
+
+test('searchGoogleBooks returns description and mainCategory from Google Books API', async () => {
+  const mockFetch = async () => ({
+    ok: true,
+    async json() {
+      return {
+        items: [
+          {
+            volumeInfo: {
+              title: 'Dune',
+              authors: ['Frank Herbert'],
+              description: 'Set on the desert planet Arrakis...',
+              mainCategory: 'Science Fiction',
+              industryIdentifiers: [{ type: 'ISBN_13', identifier: '9780441172719' }],
+            },
+          },
+        ],
+      }
+    },
+  })
+
+  const result = await searchGoogleBooks({
+    title: 'Dune',
+    author: 'Frank Herbert',
+    apiKey: 'fake-key',
+    fetchFn: mockFetch,
+  })
+  assert.equal(result.description, 'Set on the desert planet Arrakis...')
+  assert.equal(result.mainCategory, 'Science Fiction')
+  assert.equal(result.isbn, '9780441172719')
+})
+
+test('uploadcsv enriches description and mainCategory from Google Books and saves to books table', async () => {
+  const csv = [
+    'Book Id,Title,Author,ISBN,My Rating,Publisher,Binding,Number of Pages,Original Publication Year,Date Read,Date Added,Bookshelves,Bookshelves with positions,My Review,Spoiler',
+    '303,Dune Messiah,Frank Herbert,,5,Ace,Paperback,336,1969,2023/01/01,2023/01/01,read,,,false',
+  ].join('\n')
+
+  const capturedQueries = []
+  const mockDbQuery = async (sqlText, values) => {
+    capturedQueries.push({ sqlText, values })
+    return []
+  }
+
+  const mockFetch = async () => ({
+    ok: true,
+    async json() {
+      return {
+        items: [
+          {
+            volumeInfo: {
+              title: 'Dune Messiah',
+              authors: ['Frank Herbert'],
+              description: 'Dune Messiah continues the story of Paul Atreides...',
+              categories: ['Fiction'],
+              industryIdentifiers: [{ type: 'ISBN_13', identifier: '9780441102693' }],
+              imageLinks: { thumbnail: 'http://books.google.com/dunemessiah.jpg' },
+            },
+          },
+        ],
+      }
+    },
+  })
+
+  const req = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: {
+      displayName: 'ScifiFan',
+      csv,
+    },
+    googleBooksApiKey: 'mock-key',
+    fetchFn: mockFetch,
+    dbQuery: mockDbQuery,
+  }
+  const res = createMockRes()
+
+  await uploadCsvHandler(req, res)
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.payload.books.length, 1)
+
+  const returnedBook = res.payload.books[0]
+  assert.equal(returnedBook.description, 'Dune Messiah continues the story of Paul Atreides...')
+  assert.equal(returnedBook.mainCategory, 'Fiction')
+
+  // Verify database insertion for books table contains description and main_category
+  const insertBookQuery = capturedQueries.find((q) => q.sqlText.includes('INSERT INTO books'))
+  assert.ok(insertBookQuery)
+  assert.ok(
+    insertBookQuery.values.includes('Dune Messiah continues the story of Paul Atreides...'),
+    'DB insert values should include description',
+  )
+  assert.ok(insertBookQuery.values.includes('Fiction'), 'DB insert values should include main_category')
+})
+
+test('description and mainCategory only come from google books not csv', () => {
+  // CSV with rogue Description and Main Category columns
+  const csv = [
+    'Book Id,Title,Author,ISBN,My Rating,Publisher,Binding,Number of Pages,Original Publication Year,Date Read,Date Added,Bookshelves,Description,Main Category',
+    '404,Some Book,Some Author,9781234567890,5,Pub,Paperback,200,2020,2023/01/01,2023/01/01,read,CSV rogue description,CSV rogue category',
+  ].join('\n')
+
+  const { dbRows, books } = parseCsvForDatabase(csv)
+  assert.equal(dbRows.length, 1)
+  // dbRows should NOT take description or main_category from CSV
+  assert.equal(dbRows[0].description, null)
+  assert.equal(dbRows[0].main_category, null)
+
+  // books should NOT take description or mainCategory from CSV
+  assert.equal(books.length, 1)
+  assert.equal(books[0].description, '')
+  assert.equal(books[0].mainCategory, '')
+
+  // normalizeCsvBook with CSV header keys directly should also ignore Description and Main Category
+  const normalized = normalizeCsvBook({
+    'Book Id': '404',
+    Title: 'Some Book',
+    Description: 'CSV rogue description',
+    'Main Category': 'CSV rogue category',
+    category: 'another rogue category',
+  })
+  assert.equal(normalized.description, '')
+  assert.equal(normalized.mainCategory, '')
+
+  // But directly passing description and mainCategory properties (from Google Books or DB row) works:
+  const withGoogleProps = normalizeCsvBook({
+    'Book Id': '404',
+    Title: 'Some Book',
+    description: 'Real Google Books Description',
+    mainCategory: 'Science Fiction',
+  })
+  assert.equal(withGoogleProps.description, 'Real Google Books Description')
+  assert.equal(withGoogleProps.mainCategory, 'Science Fiction')
+})
+
+test('uploadcsv calls google books for every book to fill in description and mainCategory, even if ISBN is present in CSV', async () => {
+  // CSV book already has ISBN, Pages, and Publication Year
+  const csv = [
+    'Book Id,Title,Author,ISBN,My Rating,Publisher,Binding,Number of Pages,Original Publication Year,Date Read,Date Added,Bookshelves,Bookshelves with positions,My Review,Spoiler',
+    '505,Project Hail Mary,Andy Weir,9780593135204,5,Ballantine,Hardcover,496,2021,2023/05/01,2023/05/01,read,,,false',
+  ].join('\n')
+
+  const googleCalls = []
+  const mockFetch = async (url) => {
+    googleCalls.push(url)
+    return {
+      ok: true,
+      async json() {
+        return {
+          items: [
+            {
+              volumeInfo: {
+                title: 'Project Hail Mary',
+                authors: ['Andy Weir'],
+                description: 'Ryland Grace is the sole survivor on a desperate mission...',
+                mainCategory: 'Science Fiction',
+                industryIdentifiers: [{ type: 'ISBN_13', identifier: '9780593135204' }],
+                imageLinks: { thumbnail: 'https://books.google.com/hailmary.jpg' },
+              },
+            },
+          ],
+        }
+      },
+    }
+  }
+
+  const capturedQueries = []
+  const mockDbQuery = async (sqlText, values) => {
+    capturedQueries.push({ sqlText, values })
+    return []
+  }
+
+  const req = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: {
+      displayName: 'Astronaut',
+      csv,
+    },
+    googleBooksApiKey: 'mock-key',
+    fetchFn: mockFetch,
+    dbQuery: mockDbQuery,
+  }
+  const res = createMockRes()
+
+  await uploadCsvHandler(req, res)
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(googleCalls.length, 1, 'Should call Google Books for the book to get description and category')
+  assert.ok(googleCalls[0].includes('isbn:9780593135204'), 'Should query Google Books by ISBN')
+
+  const returnedBook = res.payload.books[0]
+  assert.equal(returnedBook.description, 'Ryland Grace is the sole survivor on a desperate mission...')
+  assert.equal(returnedBook.mainCategory, 'Science Fiction')
+  assert.equal(returnedBook.pages, 496, 'Should keep original CSV pages')
+  assert.equal(returnedBook.publishedYear, 2021, 'Should keep original CSV year')
+
+  const insertBookQuery = capturedQueries.find((q) => q.sqlText.includes('INSERT INTO books'))
+  assert.ok(insertBookQuery)
+  assert.ok(insertBookQuery.values.includes('Ryland Grace is the sole survivor on a desperate mission...'))
+  assert.ok(insertBookQuery.values.includes('Science Fiction'))
+})
+
+test('uploadcsv when isbn is required uses description and category from that single request without making a second request', async () => {
+  // CSV book has NO ISBN
+  const csv = [
+    'Book Id,Title,Author,ISBN,My Rating,Publisher,Binding,Number of Pages,Original Publication Year,Date Read,Date Added,Bookshelves,Bookshelves with positions,My Review,Spoiler',
+    '606,Neuromancer,William Gibson,,5,Ace,Paperback,271,1984,2023/06/01,2023/06/01,read,,,false',
+  ].join('\n')
+
+  const googleCalls = []
+  const mockFetch = async (url) => {
+    googleCalls.push(url)
+    return {
+      ok: true,
+      async json() {
+        return {
+          items: [
+            {
+              volumeInfo: {
+                title: 'Neuromancer',
+                authors: ['William Gibson'],
+                description: 'Case was the sharpest data-thief in the matrix...',
+                mainCategory: 'Cyberpunk',
+                industryIdentifiers: [{ type: 'ISBN_13', identifier: '9780441569595' }],
+                imageLinks: { thumbnail: 'https://books.google.com/neuromancer.jpg' },
+              },
+            },
+          ],
+        }
+      },
+    }
+  }
+
+  const capturedQueries = []
+  const mockDbQuery = async (sqlText, values) => {
+    capturedQueries.push({ sqlText, values })
+    return []
+  }
+
+  const req = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: {
+      displayName: 'Hacker',
+      csv,
+    },
+    googleBooksApiKey: 'mock-key',
+    fetchFn: mockFetch,
+    dbQuery: mockDbQuery,
+  }
+  const res = createMockRes()
+
+  await uploadCsvHandler(req, res)
+
+  assert.equal(res.statusCode, 200)
+  // Exactly ONE call was made to Google Books: it retrieved ISBN, description, category, and cover together!
+  assert.equal(googleCalls.length, 1, 'Only one request to Google Books should be made!')
+
+  const returnedBook = res.payload.books[0]
+  assert.equal(returnedBook.isbn, '9780441569595', 'ISBN should be enriched')
+  assert.equal(returnedBook.description, 'Case was the sharpest data-thief in the matrix...')
+  assert.equal(returnedBook.mainCategory, 'Cyberpunk')
+  assert.equal(returnedBook.imageUrl, 'https://books.google.com/neuromancer.jpg')
+
+  const insertBookQuery = capturedQueries.find((q) => q.sqlText.includes('INSERT INTO books'))
+  assert.ok(insertBookQuery)
+  assert.ok(insertBookQuery.values.includes('9780441569595'))
+  assert.ok(insertBookQuery.values.includes('Case was the sharpest data-thief in the matrix...'))
+  assert.ok(insertBookQuery.values.includes('Cyberpunk'))
+})
+
+test('uploadcsv limits the length of description text to 500 chars', async () => {
+  const longDesc = 'A long time ago in a galaxy far, far away. '.repeat(20) // > 800 chars
+  assert.ok(longDesc.length > 500)
+
+  const csv = [
+    'Book Id,Title,Author,ISBN,My Rating,Publisher,Binding,Number of Pages,Original Publication Year,Date Read,Date Added,Bookshelves,Bookshelves with positions,My Review,Spoiler',
+    '707,Star Wars,George Lucas,9780345260796,5,Del Rey,Paperback,260,1976,2023/07/01,2023/07/01,read,,,false',
+  ].join('\n')
+
+  const mockFetch = async () => ({
+    ok: true,
+    async json() {
+      return {
+        items: [
+          {
+            volumeInfo: {
+              title: 'Star Wars',
+              authors: ['George Lucas'],
+              description: longDesc,
+              categories: ['Science Fiction'],
+              industryIdentifiers: [{ type: 'ISBN_13', identifier: '9780345260796' }],
+            },
+          },
+        ],
+      }
+    },
+  })
+
+  const capturedQueries = []
+  const mockDbQuery = async (sqlText, values) => {
+    capturedQueries.push({ sqlText, values })
+    return []
+  }
+
+  const req = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: { displayName: 'Jedi', csv },
+    googleBooksApiKey: 'mock-key',
+    fetchFn: mockFetch,
+    dbQuery: mockDbQuery,
+  }
+  const res = createMockRes()
+
+  await uploadCsvHandler(req, res)
+
+  assert.equal(res.statusCode, 200)
+  const returnedBook = res.payload.books[0]
+  assert.equal(returnedBook.description.length, 500)
+  assert.equal(returnedBook.description, longDesc.slice(0, 500))
+
+  const insertBookQuery = capturedQueries.find((q) => q.sqlText.includes('INSERT INTO books'))
+  assert.ok(insertBookQuery)
+  assert.ok(insertBookQuery.values.includes(longDesc.slice(0, 500)))
+})
+
+
+

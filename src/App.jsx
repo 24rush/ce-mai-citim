@@ -1741,116 +1741,114 @@ function App() {
               </div>
 
               <div className="book-detail-content">
-                <div className="book-detail-cover-col">
-                  <div className="book-detail-cover">
-                    <img
-                      src={
-                        selectedBook.imageUrl && !selectedBook.imageUrl.includes('goodreads.com') && !selectedBook.imageUrl.includes('ssl-images-amazon.com')
-                          ? selectedBook.imageUrl
-                          : (selectedBook.isbn13 || selectedBook.isbn)
-                            ? `https://covers.openlibrary.org/b/isbn/${String(selectedBook.isbn13 || selectedBook.isbn).replace(/[^0-9X]/gi, '').trim()}-L.jpg`
-                            : ''
-                      }
-                      alt={`${selectedBook.title} cover`}
-                    />
-                  </div>
+                <div className="book-detail-top-section">
+                  <div className="book-detail-cover-col">
+                    <div className="book-detail-cover">
+                      <img
+                        src={
+                          selectedBook.imageUrl && !selectedBook.imageUrl.includes('goodreads.com') && !selectedBook.imageUrl.includes('ssl-images-amazon.com')
+                            ? selectedBook.imageUrl
+                            : (selectedBook.isbn13 || selectedBook.isbn)
+                              ? `https://covers.openlibrary.org/b/isbn/${String(selectedBook.isbn13 || selectedBook.isbn).replace(/[^0-9X]/gi, '').trim()}-L.jpg`
+                              : ''
+                        }
+                        alt={`${selectedBook.title} cover`}
+                      />
+                    </div>
 
-                  <div className="book-detail-shelf-action" ref={shelfDropdownRef}>
-                    {!supabaseUser ? (
-                      <button
-                        type="button"
-                        className="book-shelf-login-prompt-btn"
-                        onClick={() => {
-                          closeBookDetails()
-                          setShowProfileModal(true)
-                        }}
-                      >
-                        <Bookmark size={15} />
-                        <span>Login to save</span>
-                      </button>
-                    ) : (!cookieUserId || cookieUserId !== currentUserId) ? (
-                      <>
-                        <div className={`book-shelf-dropdown-btn-group ${savedShelf ? 'saved' : ''}`}>
-                          <button
-                            type="button"
-                            className="book-shelf-main-btn"
-                            disabled={isSavingShelf}
-                            onClick={() => {
-                              if (savedShelf) {
-                                handleRemoveBookFromShelf()
-                              } else {
-                                handleSaveBookToShelf(targetShelf)
+                    <div className="book-detail-shelf-action" ref={shelfDropdownRef}>
+                      {!supabaseUser ? (
+                        <button
+                          type="button"
+                          className="book-shelf-login-prompt-btn"
+                          onClick={() => {
+                            closeBookDetails()
+                            setShowProfileModal(true)
+                          }}
+                        >
+                          <Bookmark size={15} />
+                          <span>Login to save</span>
+                        </button>
+                      ) : (!cookieUserId || cookieUserId !== currentUserId) ? (
+                        <>
+                          <div className={`book-shelf-dropdown-btn-group ${savedShelf ? 'saved' : ''}`}>
+                            <button
+                              type="button"
+                              className="book-shelf-main-btn"
+                              disabled={isSavingShelf}
+                              onClick={() => {
+                                if (savedShelf) {
+                                  handleRemoveBookFromShelf()
+                                } else {
+                                  handleSaveBookToShelf(targetShelf)
+                                }
+                              }}
+                              title={
+                                savedShelf
+                                  ? `Elimină de pe raft (${getShelfLabel(targetShelf)})`
+                                  : `Salvează pe raft: ${getShelfLabel(targetShelf)}`
                               }
-                            }}
-                            title={
-                              savedShelf
-                                ? `Elimină de pe raft (${getShelfLabel(targetShelf)})`
-                                : `Salvează pe raft: ${getShelfLabel(targetShelf)}`
-                            }
-                          >
-                            {savedShelf ? <Check size={16} /> : <Bookmark size={16} />}
-                            <span>
-                              {isSavingShelf
-                                ? (savedShelf ? 'Se elimină...' : 'Se salvează...')
-                                : (savedShelf
-                                  ? `Salvat: ${getShelfLabel(targetShelf)}`
-                                  : `Salvează: ${getShelfLabel(targetShelf)}`)}
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            className={`book-shelf-chevron-toggle-btn ${shelfDropdownOpen ? 'open' : ''}`}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setShelfDropdownOpen((prev) => !prev)
-                            }}
-                            aria-label="Alege raftul"
-                            title="Alege raftul"
-                          >
-                            <ChevronDown size={16} className={`chevron-icon ${shelfDropdownOpen ? 'open' : ''}`} />
-                          </button>
-                        </div>
-
-                        {shelfDropdownOpen && (
-                          <div className="book-shelf-options-menu" onClick={(e) => e.stopPropagation()}>
-                            {SHELF_OPTIONS.map((shelf) => (
-                              <button
-                                key={shelf.id}
-                                type="button"
-                                className={`book-shelf-option-item ${targetShelf === shelf.id && savedShelf ? 'active' : ''}`}
-                                onClick={() => {
-                                  setShelfDropdownOpen(false)
-                                  if (savedShelf && targetShelf === shelf.id) {
-                                    handleRemoveBookFromShelf()
-                                  } else {
-                                    setTargetShelf(shelf.id)
-                                    handleSaveBookToShelf(shelf.id)
-                                  }
-                                }}
-                              >
-                                <span>{shelf.label}</span>
-                                {targetShelf === shelf.id && savedShelf && <Check size={14} />}
-                              </button>
-                            ))}
+                            >
+                              {savedShelf ? <Check size={16} /> : <Bookmark size={16} />}
+                              <span>
+                                {isSavingShelf
+                                  ? (savedShelf ? 'Se elimină...' : 'Se salvează...')
+                                  : (savedShelf
+                                    ? `Salvat: ${getShelfLabel(targetShelf)}`
+                                    : `Salvează: ${getShelfLabel(targetShelf)}`)}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`book-shelf-chevron-toggle-btn ${shelfDropdownOpen ? 'open' : ''}`}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setShelfDropdownOpen((prev) => !prev)
+                              }}
+                              aria-label="Alege raftul"
+                              title="Alege raftul"
+                            >
+                              <ChevronDown size={16} className={`chevron-icon ${shelfDropdownOpen ? 'open' : ''}`} />
+                            </button>
                           </div>
-                        )}
-                      </>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="book-detail-body">
-                  <h2>{selectedBook.title}</h2>
-                  <p className="book-detail-author">{selectedBook.author}</p>
 
-                  <div className="book-details">
-                    <div className="book-detail-grid">
-                      <div className="book-detail-metric">
-                        <span className="book-detail-label">An</span>
-                        <strong>{selectedBook.publishedYear || 'N/A'}</strong>
-                      </div>
+                          {shelfDropdownOpen && (
+                            <div className="book-shelf-options-menu" onClick={(e) => e.stopPropagation()}>
+                              {SHELF_OPTIONS.map((shelf) => (
+                                <button
+                                  key={shelf.id}
+                                  type="button"
+                                  className={`book-shelf-option-item ${targetShelf === shelf.id && savedShelf ? 'active' : ''}`}
+                                  onClick={() => {
+                                    setShelfDropdownOpen(false)
+                                    if (savedShelf && targetShelf === shelf.id) {
+                                      handleRemoveBookFromShelf()
+                                    } else {
+                                      setTargetShelf(shelf.id)
+                                      handleSaveBookToShelf(shelf.id)
+                                    }
+                                  }}
+                                >
+                                  <span>{shelf.label}</span>
+                                  {targetShelf === shelf.id && savedShelf && <Check size={14} />}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="book-detail-meta-col">
+                    <div className="book-detail-meta-metrics">
                       <div className="book-detail-metric">
                         <span className="book-detail-label">Pagini</span>
                         <strong>{selectedBook.pages ? selectedBook.pages.toLocaleString() : 'N/A'}</strong>
+                      </div>
+                      <div className="book-detail-metric">
+                        <span className="book-detail-label">An</span>
+                        <strong>{selectedBook.publishedYear || 'N/A'}</strong>
                       </div>
                     </div>
                     <div className="book-detail-qr-box">
@@ -1859,6 +1857,15 @@ function App() {
                       ) : null}
                     </div>
                   </div>
+                </div>
+
+                <div className="book-detail-body">
+                  <h2>{selectedBook.title}</h2>
+                  <p className="book-detail-author">{selectedBook.author}</p>
+
+                  {selectedBook.description ? (
+                    <p className="book-detail-description-text">{selectedBook.description}</p>
+                  ) : null}
 
                   {loggedInUserBook?.myReview ? (
                     <div className="book-detail-review-card">
@@ -1871,9 +1878,6 @@ function App() {
                       <p className="book-detail-review-text">{selectedBook.review}</p>
                     </div>
                   ) : null}
-
-                  <div className="book-detail-grid">
-                  </div>
                 </div>
               </div>
             </div>
