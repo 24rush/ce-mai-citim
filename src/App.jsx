@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import { BookCover } from 'book-cover-3d'
-import { ArrowUpDown, Bookmark, Check, ChevronDown, Copy, LogOut, Save, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
+import { ArrowLeft, ArrowUpDown, Bookmark, Check, ChevronDown, Copy, Loader2, LogOut, Plus, Save, Search, Share2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
 import {
   buildBookShareUrl,
   buildGoodreadsApiUrl,
@@ -143,6 +143,13 @@ function App() {
   const [shelfDropdownOpen, setShelfDropdownOpen] = useState(false)
   const [isSavingShelf, setIsSavingShelf] = useState(false)
   const [savedShelf, setSavedShelf] = useState(false)
+  const [isSearchModalOpen, setIsSearchModalOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState([])
+  const [isSearching, setIsSearching] = useState(false)
+  const [hasSearched, setHasSearched] = useState(false)
+  const [searchError, setSearchError] = useState('')
+  const [openedFromSearch, setOpenedFromSearch] = useState(false)
   const shelfDropdownRef = useRef(null)
   const [userShelvesByBookId, setUserShelvesByBookId] = useState({})
   const [isLoading, setIsLoading] = useState(true)
@@ -531,7 +538,18 @@ function App() {
   const loggedInUserBook = useMemo(() => {
     if (!selectedBook) return null
     const bookId = String(selectedBook.bookId || selectedBook.id || '')
-    return userShelvesByBookId[bookId] || null
+    if (userShelvesByBookId[bookId]) {
+      return userShelvesByBookId[bookId]
+    }
+    const cleanBookIsbn = String(selectedBook.isbn || selectedBook.isbn13 || '').replace(/[^0-9X]/gi, '').trim()
+    if (cleanBookIsbn) {
+      const match = Object.values(userShelvesByBookId).find((b) => {
+        const itemIsbn = String(b.isbn || b.isbn13 || '').replace(/[^0-9X]/gi, '').trim()
+        return itemIsbn && itemIsbn === cleanBookIsbn
+      })
+      if (match) return match
+    }
+    return null
   }, [selectedBook, userShelvesByBookId])
 
   useEffect(() => {
@@ -818,12 +836,15 @@ function App() {
   }
 
   const shareBookLink = async (book) => {
-    if (!book || !currentUserId) {
+    if (!book) {
       return
     }
 
+    const userIdToUse = currentUserId || cookieUserId
     const bookId = String(book.bookId || book.id)
-    const shareUrl = buildBookShareUrl(currentUserId, activeShelf, bookId, window.location.origin)
+    const shareUrl = userIdToUse
+      ? buildBookShareUrl(userIdToUse, activeShelf, bookId, window.location.origin)
+      : (book.link || window.location.href)
 
     if (!shareUrl) {
       return
@@ -841,12 +862,16 @@ function App() {
 
       if (navigator.clipboard) {
         await navigator.clipboard.writeText(shareUrl)
+        setCopiedUrl(true)
+        setTimeout(() => setCopiedUrl(false), 2000)
       }
     } catch (shareError) {
       console.error(shareError)
       try {
         if (navigator.clipboard) {
           await navigator.clipboard.writeText(shareUrl)
+          setCopiedUrl(true)
+          setTimeout(() => setCopiedUrl(false), 2000)
         }
       } catch (copyError) {
         console.error(copyError)
@@ -855,6 +880,15 @@ function App() {
   }
 
   const closeBookDetails = () => {
+    if (openedFromSearch) {
+      setSelectedBook(null)
+      setOpenedFromSearch(false)
+      setIsSearchModalOpen(true)
+      setShelfDropdownOpen(false)
+      setSavedShelf(false)
+      return
+    }
+
     const routePath = currentUserId ? `/${currentUserId}/${activeShelf}` : '/'
     window.history.pushState({}, '', routePath)
     setRequestedBookId('')
@@ -862,6 +896,39 @@ function App() {
     setShelfDropdownOpen(false)
     setSavedShelf(false)
     setError('')
+  }
+
+  const handleSearchSubmit = async (e) => {
+    if (e) e.preventDefault()
+    const cleanQuery = searchQuery.trim()
+    if (!cleanQuery) return
+
+    setIsSearching(true)
+    setSearchError('')
+    setHasSearched(true)
+
+    try {
+      const response = await fetch(`/api/search?q=${encodeURIComponent(cleanQuery)}&limit=10`)
+      if (!response.ok) {
+        throw new Error(`Căutarea a eșuat (status ${response.status})`)
+      }
+      const data = await response.json()
+      if (data?.books) {
+        setSearchResults(data.books)
+      } else {
+        setSearchResults([])
+      }
+    } catch (err) {
+      console.error('Search error:', err)
+      setSearchError('A apărut o problemă la căutare. Te rugăm să încerci din nou.')
+    } finally {
+      setIsSearching(false)
+    }
+  }
+
+  const handleSelectSearchBook = (book) => {
+    setOpenedFromSearch(true)
+    setSelectedBook(book)
   }
 
   const handleHeaderClick = () => {
@@ -896,7 +963,7 @@ function App() {
       return
     }
 
-    const bookId = String(selectedBook.bookId || selectedBook.id || '')
+    const bookId = String(selectedBook.bookId || selectedBook.id || loggedInUserBook?.bookId || '')
     if (!bookId) return
 
     try {
@@ -917,6 +984,9 @@ function App() {
             publishedYear: selectedBook.publishedYear,
             publisher: selectedBook.publisher,
             binding: selectedBook.binding,
+            description: selectedBook.description,
+            mainCategory: selectedBook.mainCategory,
+            coverUrl: selectedBook.imageUrl || selectedBook.coverUrl,
           },
         }),
       })
@@ -940,6 +1010,9 @@ function App() {
           isbn: selectedBook.isbn,
         },
       }))
+      if (cookieUserId && currentUserId === cookieUserId) {
+        setBooksFetchTrigger((prev) => prev + 1)
+      }
     } catch (err) {
       console.error('Error saving book to shelf:', err)
     } finally {
@@ -956,7 +1029,7 @@ function App() {
       return
     }
 
-    const bookId = String(selectedBook.bookId || selectedBook.id || '')
+    const bookId = String(selectedBook.bookId || selectedBook.id || loggedInUserBook?.bookId || '')
     if (!bookId) return
 
     try {
@@ -978,8 +1051,14 @@ function App() {
       setUserShelvesByBookId((prev) => {
         const next = { ...prev }
         delete next[bookId]
+        if (loggedInUserBook?.bookId) {
+          delete next[loggedInUserBook.bookId]
+        }
         return next
       })
+      if (cookieUserId && currentUserId === cookieUserId) {
+        setBooksFetchTrigger((prev) => prev + 1)
+      }
     } catch (err) {
       console.error('Error removing book from shelf:', err)
     } finally {
@@ -1168,15 +1247,19 @@ function App() {
   }
 
   useEffect(() => {
-    if (!selectedBook) return undefined
+    if (!selectedBook && !isSearchModalOpen) return undefined
 
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
-        closeBookDetails()
+        if (selectedBook) {
+          closeBookDetails()
+        } else if (isSearchModalOpen) {
+          setIsSearchModalOpen(false)
+        }
         return
       }
 
-      if (!isOtherUserProfile) return
+      if (!isOtherUserProfile || !selectedBook) return
 
       if (event.key === 'ArrowRight') {
         event.preventDefault()
@@ -1189,7 +1272,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedBook, isOtherUserProfile, books, modalSwipeExit, cookieUserId, currentUserId, supabaseUser])
+  }, [selectedBook, isSearchModalOpen, isOtherUserProfile, books, modalSwipeExit, cookieUserId, currentUserId, supabaseUser, openedFromSearch])
 
   const modalRotation = useMemo(() => {
     if (modalSwipeExit === 'right') return 16
@@ -1717,26 +1800,14 @@ function App() {
               )}
 
               <div className="book-detail-header">
-                <div className="profile-modal-header-spacer" />
                 <button
                   type="button"
-                  className="book-detail-share-button"
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    shareBookLink(selectedBook)
-                  }}
-                  aria-label={`Share link for ${selectedBook.title}`}
-                >
-                  Share
-                </button>
-                <button
-                  type="button"
-                  className="toolbar-clear-button"
+                  className="book-detail-back-button"
                   onClick={closeBookDetails}
-                  aria-label="Close book details"
+                  aria-label="Înapoi"
+                  title="Înapoi"
                 >
-                  ×
+                  <ArrowLeft size={18} />
                 </button>
               </div>
 
@@ -1769,7 +1840,7 @@ function App() {
                           <Bookmark size={15} />
                           <span>Login to save</span>
                         </button>
-                      ) : (!cookieUserId || cookieUserId !== currentUserId) ? (
+                      ) : (
                         <>
                           <div className={`book-shelf-dropdown-btn-group ${savedShelf ? 'saved' : ''}`}>
                             <button
@@ -1836,7 +1907,7 @@ function App() {
                             </div>
                           )}
                         </>
-                      ) : null}
+                      )}
                     </div>
                   </div>
 
@@ -1855,6 +1926,19 @@ function App() {
                       {bookQrCodeDataUrl ? (
                         <img src={bookQrCodeDataUrl} alt={`QR code for ${selectedBook.title}`} className="book-detail-qr-image" />
                       ) : null}
+                      <button
+                        type="button"
+                        className="book-detail-share-button"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          shareBookLink(selectedBook)
+                        }}
+                        aria-label={copiedUrl ? 'Link copiat!' : `Distribuie ${selectedBook.title}`}
+                        title={copiedUrl ? 'Link copiat!' : 'Distribuie'}
+                      >
+                        {copiedUrl ? <Check size={18} /> : <Share2 size={18} />}
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -2242,6 +2326,133 @@ function App() {
               Creează librăria ta
             </button>
           )
+        )}
+
+        {!isCheckingAuth && supabaseUser && (
+          <button
+            type="button"
+            className="sticky-add-book-btn"
+            onClick={() => {
+              setIsSearchModalOpen(true)
+              setSearchError('')
+            }}
+            aria-label="Caută și adaugă cărți"
+            title="Caută și adaugă cărți"
+          >
+            <Plus size={24} strokeWidth={2.4} />
+          </button>
+        )}
+
+        {isSearchModalOpen && !selectedBook && (
+          <div
+            className="search-modal-backdrop"
+            onClick={() => setIsSearchModalOpen(false)}
+          >
+            <div
+              className="search-modal"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="search-modal-title"
+            >
+              <div className="search-modal-header">
+                <h2 id="search-modal-title" className="search-modal-title">
+                  Adaugă o carte
+                </h2>
+                <button
+                  type="button"
+                  className="search-modal-close"
+                  onClick={() => setIsSearchModalOpen(false)}
+                  aria-label="Închide căutarea"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form className="search-modal-form" onSubmit={handleSearchSubmit}>
+                <div className="search-input-wrapper">
+                  <Search size={18} className="search-input-icon" />
+                  <input
+                    type="text"
+                    className="search-input"
+                    placeholder="Caută după titlu, autor sau ISBN..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    autoFocus
+                  />
+                  {searchQuery ? (
+                    <button
+                      type="button"
+                      className="search-input-clear-btn"
+                      onClick={() => setSearchQuery('')}
+                      aria-label="Șterge textul"
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+                <button
+                  type="submit"
+                  className="search-submit-btn"
+                  disabled={isSearching || !searchQuery.trim()}
+                >
+                  {isSearching ? <Loader2 size={16} className="spin-icon" /> : 'Caută'}
+                </button>
+              </form>
+
+              {isSearching ? (
+                <div className="search-loading-state">
+                  <Loader2 size={24} className="spin-icon" />
+                  <span>Se caută pe Google Books...</span>
+                </div>
+              ) : searchError ? (
+                <div className="search-error-state">{searchError}</div>
+              ) : hasSearched && searchResults.length === 0 ? (
+                <div className="search-empty-state">
+                  Nu am găsit nicio carte pentru „{searchQuery}”.
+                </div>
+              ) : searchResults.length > 0 ? (
+                <div className="search-results-list">
+                  {searchResults.map((book) => (
+                    <div
+                      key={book.bookId}
+                      className="search-result-item"
+                      onClick={() => handleSelectSearchBook(book)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          handleSelectSearchBook(book)
+                        }
+                      }}
+                    >
+                      <div className="search-result-cover">
+                        {book.imageUrl ? (
+                          <img src={book.imageUrl} alt={book.title} />
+                        ) : (
+                          <div className="search-result-cover-placeholder">📖</div>
+                        )}
+                      </div>
+                      <div className="search-result-info">
+                        <div className="search-result-title" title={book.title}>
+                          {book.title}
+                        </div>
+                        <div className="search-result-author" title={book.author}>
+                          {book.author}
+                        </div>
+                        {book.publishedYear ? (
+                          <span className="search-result-year">
+                            {book.publishedYear}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
         )}
       </main>
     </div >

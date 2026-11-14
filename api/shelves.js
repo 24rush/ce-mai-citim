@@ -33,12 +33,14 @@ export const saveBookToShelf = async ({
   const binding = String(book.binding || '').trim()
   const pages = Number.parseInt(book.pages || book.numberOfPages, 10) || null
   const publishedYear = Number.parseInt(book.publishedYear || book.originalPublicationYear, 10) || null
+  const description = book.description ? String(book.description).slice(0, 500) : null
+  const mainCategory = book.mainCategory ? String(book.mainCategory) : null
 
   const bookSql = `
     INSERT INTO books (
-      book_id, title, author, isbn, publisher, binding, number_of_pages, original_publication_year
+      book_id, title, author, isbn, publisher, binding, number_of_pages, original_publication_year, description, main_category
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     ON CONFLICT (book_id)
     DO UPDATE SET
       title = EXCLUDED.title,
@@ -48,6 +50,8 @@ export const saveBookToShelf = async ({
       binding = COALESCE(NULLIF(EXCLUDED.binding, ''), books.binding),
       number_of_pages = COALESCE(EXCLUDED.number_of_pages, books.number_of_pages),
       original_publication_year = COALESCE(EXCLUDED.original_publication_year, books.original_publication_year),
+      description = COALESCE(NULLIF(EXCLUDED.description, ''), books.description),
+      main_category = COALESCE(NULLIF(EXCLUDED.main_category, ''), books.main_category),
       updated_at = NOW();
   `.trim()
 
@@ -60,7 +64,22 @@ export const saveBookToShelf = async ({
     binding,
     pages,
     publishedYear,
+    description,
+    mainCategory,
   ])
+
+  const coverUrl = book.coverUrl || book.imageUrl
+  const cleanIsbnVal = String(isbn || '').replace(/[^0-9X]/gi, '').trim()
+  if (coverUrl && cleanIsbnVal) {
+    try {
+      await executeQuery(
+        `INSERT INTO covers (isbn, url) VALUES ($1, $2) ON CONFLICT (isbn) DO UPDATE SET url = EXCLUDED.url;`,
+        [cleanIsbnVal, coverUrl]
+      )
+    } catch {
+      // Best effort
+    }
+  }
 
   // 2. Upsert user shelf connection
   const shelfSql = `

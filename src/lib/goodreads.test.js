@@ -31,6 +31,7 @@ import isbnHandler, {
 } from '../../api/isbn.js'
 import profileHandler from '../../api/profile.js'
 import shelvesHandler, { saveBookToShelf, removeBookFromShelf, getBookShelfStatus, getUserShelves } from '../../api/shelves.js'
+import searchHandler, { searchGoogleBooksVolumes } from '../../api/search.js'
 
 const createMockRes = () => {
   const res = {
@@ -1212,6 +1213,8 @@ test('saveBookToShelf saves canonical book and upserts user_shelves', async () =
     '',
     412,
     1965,
+    null,
+    null,
   ])
 
   assert.match(executedQueries[1].sql, /INSERT INTO user_shelves/)
@@ -2224,6 +2227,103 @@ test('uploadcsv limits the length of description text to 500 chars', async () =>
   assert.ok(insertBookQuery)
   assert.ok(insertBookQuery.values.includes(longDesc.slice(0, 500)))
 })
+
+test('searchGoogleBooksVolumes returns top 10 mapped books from Google Books', async () => {
+  let requestedUrl = ''
+  const mockFetch = async (url) => {
+    requestedUrl = url
+    return {
+      ok: true,
+      async json() {
+        return {
+          items: [
+            {
+              id: 'vol123',
+              volumeInfo: {
+                title: 'Dune',
+                authors: ['Frank Herbert'],
+                publishedDate: '1965-08-01',
+                pageCount: 688,
+                description: 'A masterpiece of science fiction.',
+                mainCategory: 'Fiction',
+                industryIdentifiers: [{ type: 'ISBN_13', identifier: '9780441172719' }],
+                imageLinks: { thumbnail: 'http://books.google.com/dune.jpg&edge=curl' },
+                infoLink: 'https://books.google.com/dune',
+              },
+            },
+          ],
+        }
+      },
+    }
+  }
+
+  const results = await searchGoogleBooksVolumes({
+    query: 'Dune',
+    limit: 10,
+    apiKey: 'test-key',
+    fetchFn: mockFetch,
+  })
+
+  assert.ok(requestedUrl.includes('q=Dune'))
+  assert.ok(requestedUrl.includes('maxResults=10'))
+  assert.equal(results.length, 1)
+  assert.equal(results[0].bookId, 'gb_vol123')
+  assert.equal(results[0].title, 'Dune')
+  assert.equal(results[0].author, 'Frank Herbert')
+  assert.equal(results[0].publishedYear, 1965)
+  assert.equal(results[0].pages, 688)
+  assert.equal(results[0].description, 'A masterpiece of science fiction.')
+  assert.equal(results[0].mainCategory, 'Fiction')
+  assert.equal(results[0].isbn, '9780441172719')
+  assert.equal(results[0].imageUrl, 'https://books.google.com/dune.jpg')
+  assert.equal(results[0].link, 'https://books.google.com/dune')
+})
+
+test('search endpoint validates query and handles GET requests', async () => {
+  const reqMissingQ = { method: 'GET', query: {} }
+  const resMissingQ = createMockRes()
+  await searchHandler(reqMissingQ, resMissingQ)
+  assert.equal(resMissingQ.statusCode, 400)
+
+  const reqPost = { method: 'POST', query: { q: 'Dune' } }
+  const resPost = createMockRes()
+  await searchHandler(reqPost, resPost)
+  assert.equal(resPost.statusCode, 405)
+
+  const mockFetch = async () => ({
+    ok: true,
+    async json() {
+      return {
+        items: [
+          {
+            id: 'gb_item1',
+            volumeInfo: {
+              title: 'Hyperion',
+              authors: ['Dan Simmons'],
+              publishedDate: '1989',
+            },
+          },
+        ],
+      }
+    },
+  })
+
+  const reqValid = {
+    method: 'GET',
+    query: { q: 'Hyperion' },
+    googleBooksApiKey: 'mock-key',
+    fetchFn: mockFetch,
+  }
+  const resValid = createMockRes()
+  await searchHandler(reqValid, resValid)
+  assert.equal(resValid.statusCode, 200)
+  assert.equal(resValid.payload.success, true)
+  assert.equal(resValid.payload.books.length, 1)
+  assert.equal(resValid.payload.books[0].title, 'Hyperion')
+  assert.equal(resValid.payload.books[0].author, 'Dan Simmons')
+  assert.equal(resValid.payload.books[0].publishedYear, 1989)
+})
+
 
 
 
