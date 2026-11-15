@@ -608,10 +608,10 @@ export const enrichMissingIsbns = async ({
             discoveredCovers.push({ isbn: cand, url: existingDbBook.cover_url })
           }
         }
-      }
 
-      // Skip querying Google Books because this book is already in the database
-      continue
+        // Skip querying Google Books because this book and its cover are already in the database
+        continue
+      }
     }
 
     targets.push(candidate)
@@ -667,6 +667,9 @@ export const enrichMissingIsbns = async ({
             if (book) {
               book.imageUrl = foundCoverUrl
             }
+            if (!row.isbn && row.book_id) {
+              row.isbn = String(row.book_id).trim()
+            }
             const candidateIsbns = [
               row.isbn,
               result.isbn,
@@ -684,8 +687,6 @@ export const enrichMissingIsbns = async ({
                 discoveredCovers.push({ isbn: cand, url: foundCoverUrl })
               }
             }
-          } else if (missingIsbn && result.isbn && book && (!book.imageUrl || book.imageUrl.includes('covers.openlibrary.org'))) {
-            book.imageUrl = `https://covers.openlibrary.org/b/isbn/${result.isbn}-L.jpg`
           }
 
           // 2. Fill missing publication year if the csv does not contain it

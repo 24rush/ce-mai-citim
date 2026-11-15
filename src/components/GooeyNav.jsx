@@ -40,7 +40,7 @@ const DEFAULT_ITEMS = [
 ];
 
 const MAX_DROPS = 32;
-const MAX_PILLS = 4;
+const MAX_PILLS = 5;
 const MARGIN = 72;
 
 const VERTEX = `#version 300 es
@@ -252,9 +252,9 @@ const GooeyNav = ({
   settingsRef.current = settings;
 
   const select = index => {
+    onChange?.(index, items[index]);
     if (index === current) return;
     if (activeIndex === undefined) setInnerIndex(index);
-    onChange?.(index, items[index]);
   };
 
   useIsomorphicLayoutEffect(() => {

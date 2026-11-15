@@ -141,7 +141,7 @@ export const extractMainCategoryFromVolume = (item) => {
 
 export const buildSearchResult = (topItem, defaultIsbn, defaultTitle, defaultAuthor, allItems = []) => {
   if (!topItem) return null
-  const resolvedIsbn = defaultIsbn || extractIsbnFromVolume(topItem) || null
+  const resolvedIsbn = defaultIsbn || extractIsbnFromVolume(topItem) || extractBestIsbnFromItems(allItems) || null
   let coverUrl = extractCoverFromVolume(topItem)
 
   if (!coverUrl && Array.isArray(allItems)) {

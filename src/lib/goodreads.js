@@ -1,4 +1,4 @@
-const RESERVED_SEGMENTS = new Set(['read', 'to-read', 'currently-reading', 'api', 'goodreads'])
+const RESERVED_SEGMENTS = new Set(['read', 'to-read', 'currently-reading', 'did-not-finish', 'collections', 'api', 'goodreads'])
 
 export const USER_ID_COOKIE_NAME = 'userId'
 
@@ -45,7 +45,7 @@ export const extractGoodreadsUserId = (value) => {
   return candidate || ''
 }
 
-export const SHELF_IDS = ['read', 'to-read', 'currently-reading', 'did-not-finish']
+export const SHELF_IDS = ['read', 'to-read', 'currently-reading', 'did-not-finish', 'collections']
 
 export const isRootPath = (pathname = '') => {
   const normalized = String(pathname || '').trim().replace(/\/+$/, '')
@@ -301,18 +301,11 @@ export const normalizeCsvBook = (record = {}, index = 0) => {
         : 35
 
   const resolvedId = bookId || `${title}-${index}`
-  const defaultCoverUrl = isbn
-    ? `https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg`
-    : isbn13
-      ? `https://covers.openlibrary.org/b/isbn/${isbn13}-L.jpg`
-      : isbn10
-        ? `https://covers.openlibrary.org/b/isbn/${isbn10}-L.jpg`
-        : ''
   const rawImageUrl = cleanCsvValue(getField('imageUrl', 'image_url', 'coverUrl', 'cover_url'))
   const imageUrl =
     rawImageUrl && !rawImageUrl.includes('compressed.photo.goodreads.com') && !rawImageUrl.includes('ssl-images-amazon.com')
       ? rawImageUrl
-      : defaultCoverUrl
+      : ''
   const link =
     cleanCsvValue(getField('link', 'url')) ||
     (bookId ? `https://www.goodreads.com/book/show/${bookId}` : '#')

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import { BookCover } from 'book-cover-3d'
-import { ArrowLeft, ArrowUpDown, Bookmark, Check, ChevronDown, Copy, Loader2, LogOut, Plus, Save, Search, Share2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
+import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FolderPlus, Library, Loader2, Lock, LogOut, Plus, Save, Search, Share2, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
 import {
   buildBookShareUrl,
   buildGoodreadsApiUrl,
@@ -14,21 +14,30 @@ import {
   parseGoodreadsCsv,
   setUserIdCookie,
 } from './lib/goodreads'
-import GradientASCII from './components/GradientASCII'
-import GooeyNav from './components/GooeyNav'
+import RubberSegment from './components/RubberSegment'
+import JellyRadio from './components/JellyRadio'
 import GlideSelect from './components/GlideSelect'
 import AuthModalView from './components/AuthModalView'
 import { createClient, isSupabaseConfigured } from './lib/client'
 import './App.css'
 
-const INITIAL_PULLED_IMAGES_COUNT = 10
-const IMAGES_PULL_AHEAD = 10
-
 const SHELF_OPTIONS = [
   { id: 'read', label: 'Citite', query: 'read' },
   { id: 'to-read', label: 'De citit', query: 'to-read' },
   { id: 'currently-reading', label: 'În curs', query: 'currently-reading' },
-  { id: 'did-not-finish', label: 'Abandonate', query: 'did-not-finish' },
+  { id: 'did-not-finish', label: 'DNF', query: 'did-not-finish' },
+]
+
+const TOP_NAV_OPTIONS = [
+  { id: 'shelves', label: 'Rafturi', icon: <BookOpen size={16} strokeWidth={2.2} /> },
+  { id: 'explore', label: 'Explorează', icon: <Compass size={16} strokeWidth={2.2} /> },
+  { id: 'collections', label: 'Colecții', icon: <Library size={16} strokeWidth={2.2} /> },
+]
+
+const COLLECTION_FILTER_OPTIONS = [
+  { id: 'all', label: 'Toate' },
+  { id: 'public', label: 'Publice' },
+  { id: 'private', label: 'Private' },
 ]
 
 const getShelfLabel = (shelfId) => {
@@ -107,18 +116,263 @@ const fetchBooksFromApi = async (apiUrl, signal) => {
   }
 }
 
-const DEFAULT_USER_ID = '18354013'
+function CollectionRow({
+  collection,
+  isOwner,
+  showCreator,
+  onSelectCreator,
+  onAddBookClick,
+  onDeleteCollection,
+  onBookClick,
+}) {
+  const rowCarouselRef = useRef(null)
+  const rowDragRef = useRef({ isDown: false, active: false, pointerId: null, startX: 0, startY: 0, scrollLeft: 0 })
+  const rowTapMovedRef = useRef(false)
+
+  const normalizedBooks = useMemo(
+    () => (Array.isArray(collection.books) ? collection.books.map((b, idx) => normalizeCsvBook(b, idx)) : []),
+    [collection.books],
+  )
+
+  const scrollRow = (direction) => {
+    if (!rowCarouselRef.current) return
+    const firstCard = rowCarouselRef.current.querySelector('.book-card')
+    const cardWidth = firstCard ? firstCard.getBoundingClientRect().width : 200
+    rowCarouselRef.current.scrollBy({
+      left: direction * (cardWidth + 16),
+      behavior: 'smooth',
+    })
+  }
+
+  const handleRowPointerDown = (event) => {
+    rowTapMovedRef.current = false
+    if (!rowCarouselRef.current || event.pointerType === 'touch') return
+    if (event.target.closest('button, a, input')) return
+    rowDragRef.current = {
+      isDown: true,
+      active: false,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      scrollLeft: rowCarouselRef.current.scrollLeft,
+    }
+  }
+
+  const handleRowPointerMove = (event) => {
+    if (!rowDragRef.current.isDown || event.pointerType === 'touch') return
+    const dx = event.clientX - rowDragRef.current.startX
+    const dy = event.clientY - rowDragRef.current.startY
+    if (!rowDragRef.current.active && Math.hypot(dx, dy) > 6) {
+      rowDragRef.current.active = true
+      rowTapMovedRef.current = true
+      if (typeof event.currentTarget?.setPointerCapture === 'function') {
+        try {
+          event.currentTarget.setPointerCapture(event.pointerId)
+        } catch {
+          // ignore
+        }
+      }
+    }
+    if (!rowDragRef.current.active || !rowCarouselRef.current) return
+    event.preventDefault()
+    rowCarouselRef.current.scrollLeft = rowDragRef.current.scrollLeft - dx
+  }
+
+  const handleRowPointerUp = (event) => {
+    if (rowDragRef.current.active && typeof event.currentTarget?.hasPointerCapture === 'function') {
+      if (typeof event.pointerId === 'number' && event.currentTarget.hasPointerCapture(event.pointerId)) {
+        try {
+          event.currentTarget.releasePointerCapture(event.pointerId)
+        } catch {
+          // ignore
+        }
+      }
+    }
+    rowDragRef.current = { isDown: false, active: false, pointerId: null, startX: 0, startY: 0, scrollLeft: 0 }
+  }
+
+  return (
+    <div className="collection-row-card">
+      <div className="collection-row-header">
+        <div className="collection-row-title-group">
+          <h3 className="collection-row-title">{collection.title}</h3>
+          <span className="collection-row-count">
+            {normalizedBooks.length} {normalizedBooks.length === 1 ? 'carte' : 'cărți'}
+          </span>
+          {collection.isPrivate ? (
+            <span className="collection-row-private-badge" title="Vizibilă doar pentru tine">
+              <Lock size={12} />
+              <span>Privată</span>
+            </span>
+          ) : null}
+          {showCreator && collection.username ? (
+            <button
+              type="button"
+              className="collection-row-creator-btn"
+              onClick={() => onSelectCreator?.(collection.userId)}
+              title={`Vezi profilul lui ${collection.username}`}
+            >
+              de <span>{collection.username}</span>
+            </button>
+          ) : null}
+        </div>
+
+        {isOwner ? (
+          <div className="collection-row-actions">
+            <button
+              type="button"
+              className="collection-add-book-btn"
+              onClick={() => onAddBookClick?.(collection)}
+              title={`Adaugă o carte în „${collection.title}”`}
+            >
+              <Plus size={15} />
+            </button>
+            <button
+              type="button"
+              className="collection-delete-btn"
+              onClick={() => onDeleteCollection?.(collection)}
+              aria-label={`Șterge colecția ${collection.title}`}
+              title="Șterge colecția"
+            >
+              <Trash2 size={15} />
+            </button>
+          </div>
+        ) : null}
+      </div>
+
+      {collection.description ? (
+        <p className="collection-row-description">{collection.description}</p>
+      ) : null}
+
+      {normalizedBooks.length === 0 ? (
+        <div className="collection-row-empty">
+          <span>Nicio carte în această colecție încă.</span>
+          {isOwner ? (
+            <button
+              type="button"
+              className="collection-empty-add-btn"
+              onClick={() => onAddBookClick?.(collection)}
+            >
+              <Plus size={14} />
+              <span>Adaugă prima carte</span>
+            </button>
+          ) : null}
+        </div>
+      ) : (
+        <div
+          className="carousel-panel collection-carousel-panel"
+          onPointerDown={handleRowPointerDown}
+          onPointerMove={handleRowPointerMove}
+          onPointerUp={handleRowPointerUp}
+          onPointerCancel={handleRowPointerUp}
+        >
+          {normalizedBooks.length > 2 ? (
+            <button
+              type="button"
+              className="nav-button"
+              onClick={() => scrollRow(-1)}
+              aria-label={`Derulează stânga în ${collection.title}`}
+            >
+              ←
+            </button>
+          ) : null}
+
+          <div className="books-carousel collection-row-carousel" ref={rowCarouselRef}>
+            {normalizedBooks.map((book) => {
+              const safeCoverUrl = book.imageUrl || ''
+
+              return (
+                <article key={`${collection.id}-${book.bookId || book.id}`} className="book-card">
+                  <div
+                    className="book-cover-surface"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      if (rowDragRef.current.active || rowTapMovedRef.current) return
+                      onBookClick?.(book, { ...collection, books: normalizedBooks })
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        onBookClick?.(book, { ...collection, books: normalizedBooks })
+                      }
+                    }}
+                    aria-label={`Deschide detaliile pentru ${book.title}`}
+                  >
+                    <BookCover
+                      width={180}
+                      height={260}
+                      thickness={book.thickness}
+                      rotate={20}
+                      rotateHover={30}
+                      perspective={900}
+                      pagesOffset={4}
+                      bgColor="#0f172a"
+                      shadowColor="transparent"
+                    >
+                      <div className="book-cover-art">
+                        {safeCoverUrl ? (
+                          <img src={safeCoverUrl} alt={`${book.title} cover`} loading="lazy" />
+                        ) : (
+                          <div className="book-cover-placeholder" aria-hidden="true" />
+                        )}
+                      </div>
+                    </BookCover>
+                  </div>
+
+                  <div className="book-meta">
+                    <h2
+                      onClick={() => {
+                        if (rowDragRef.current.active || rowTapMovedRef.current) return
+                        onBookClick?.(book, { ...collection, books: normalizedBooks })
+                      }}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      {book.title}
+                    </h2>
+                    <p>{book.author}</p>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+
+          {normalizedBooks.length > 2 ? (
+            <button
+              type="button"
+              className="nav-button"
+              onClick={() => scrollRow(1)}
+              aria-label={`Derulează dreapta în ${collection.title}`}
+            >
+              →
+            </button>
+          ) : null}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function App() {
   const initialRouteState = useMemo(() => getRouteStateFromPath(window.location.pathname), [])
   const [books, setBooks] = useState([])
   const [username, setUsername] = useState('')
   const [activeShelf, setActiveShelf] = useState(() => initialRouteState.shelf || 'read')
+  const lastBookShelfRef = useRef(
+    initialRouteState.shelf && initialRouteState.shelf !== 'collections'
+      ? initialRouteState.shelf
+      : 'read'
+  )
+  if (activeShelf !== 'collections') {
+    lastBookShelfRef.current = activeShelf
+  }
   const [activeAuthorFilter, setActiveAuthorFilter] = useState('all')
   const [activeBookSort, setActiveBookSort] = useState('recently-read')
-  const [currentUserId, setCurrentUserId] = useState(
-    () => initialRouteState.userId || getUserIdFromCookie() || DEFAULT_USER_ID,
-  )
+  const [currentUserId, setCurrentUserId] = useState(() => {
+    if (initialRouteState.userId) return initialRouteState.userId
+    if (!isSupabaseConfigured()) return getUserIdFromCookie() || ''
+    return ''
+  })
   const [cookieUserId, setCookieUserId] = useState(() => getUserIdFromCookie())
   const [supabaseUser, setSupabaseUser] = useState(null)
   const supabaseUserRef = useRef(supabaseUser)
@@ -150,19 +404,36 @@ function App() {
   const [hasSearched, setHasSearched] = useState(false)
   const [searchError, setSearchError] = useState('')
   const [openedFromSearch, setOpenedFromSearch] = useState(false)
+  const [userCollections, setUserCollections] = useState([])
+  const [exploreCollections, setExploreCollections] = useState([])
+  const [activeCollectionFilter, setActiveCollectionFilter] = useState('all')
+  const [isLoadingCollections, setIsLoadingCollections] = useState(false)
+  const [isExploreMode, setIsExploreMode] = useState(
+    () => isRootPath(window.location.pathname) || !initialRouteState.userId,
+  )
+  const [showNewCollectionInput, setShowNewCollectionInput] = useState(false)
+  const [newCollectionTitle, setNewCollectionTitle] = useState('')
+  const [newCollectionDescription, setNewCollectionDescription] = useState('')
+  const [newCollectionIsPrivate, setNewCollectionIsPrivate] = useState(false)
+  const [isCreatingCollection, setIsCreatingCollection] = useState(false)
+  const [targetCollectionForSearch, setTargetCollectionForSearch] = useState(null)
+  const [activeModalCollection, setActiveModalCollection] = useState(null)
+  const [isAddingBookToCollection, setIsAddingBookToCollection] = useState(false)
+  const [isRemovingFromCollection, setIsRemovingFromCollection] = useState(false)
+  const [collectionsRefreshTrigger, setCollectionsRefreshTrigger] = useState(0)
   const shelfDropdownRef = useRef(null)
   const [userShelvesByBookId, setUserShelvesByBookId] = useState({})
   const [isLoading, setIsLoading] = useState(true)
   const [booksFetchTrigger, setBooksFetchTrigger] = useState(0)
   const availableBookSortOptions = useMemo(() => getBookSortOptions(activeShelf), [activeShelf])
   const [error, setError] = useState('')
-  const [pulledImagesCount, setPulledImagesCount] = useState(INITIAL_PULLED_IMAGES_COUNT)
   const carouselRef = useRef(null)
   const dragState = useRef({ isDown: false, active: false, startX: 0, startY: 0, scrollLeft: 0 })
   const rafIdRef = useRef(null)
   const pointerDragRef = useRef({ startX: 0, startY: 0, hasMoved: false })
   const lastScrollTimeRef = useRef(0)
-  const syncedCoversRef = useRef(new Set())
+  const loadedUserIdRef = useRef(null)
+  const syncedAuthUserIdRef = useRef(null)
   const nameInputRef = useRef(null)
 
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
@@ -196,6 +467,101 @@ function App() {
 
     return String(activeUser) !== String(currentUserId)
   }, [isUserLoggedIn, currentUserId, cookieUserId])
+
+  const isOwnProfile = useMemo(() => {
+    if (!isUserLoggedIn) return false
+    const activeUser = cookieUserId || getUserIdFromCookie()
+    if (!activeUser || !currentUserId) return false
+    return String(activeUser) === String(currentUserId)
+  }, [isUserLoggedIn, currentUserId, cookieUserId])
+
+  const isOwnCollectionModal = useMemo(() => {
+    if (!activeModalCollection || !isUserLoggedIn) return false
+    const activeUser = cookieUserId || getUserIdFromCookie()
+    if (!activeUser) return false
+    return String(activeModalCollection.userId) === String(activeUser)
+  }, [activeModalCollection, isUserLoggedIn, cookieUserId])
+
+  const isSwipableModal = useMemo(() => {
+    if (activeModalCollection) {
+      return !isOwnCollectionModal
+    }
+    return isOtherUserProfile
+  }, [activeModalCollection, isOwnCollectionModal, isOtherUserProfile])
+
+  const modalBookList = useMemo(() => {
+    if (activeModalCollection && Array.isArray(activeModalCollection.books)) {
+      return activeModalCollection.books
+    }
+    return books
+  }, [activeModalCollection, books])
+
+  const collectionCounts = useMemo(() => {
+    const publicCount = userCollections.filter((c) => !c.isPrivate).length
+    const privateCount = userCollections.filter((c) => Boolean(c.isPrivate)).length
+    return {
+      all: userCollections.length,
+      public: publicCount,
+      private: privateCount,
+    }
+  }, [userCollections])
+
+  const filteredUserCollections = useMemo(() => {
+    if (activeCollectionFilter === 'public') {
+      return userCollections.filter((c) => !c.isPrivate)
+    }
+    if (activeCollectionFilter === 'private') {
+      return userCollections.filter((c) => Boolean(c.isPrivate))
+    }
+    return userCollections
+  }, [userCollections, activeCollectionFilter])
+
+  useEffect(() => {
+    if (activeShelf !== 'collections' || !currentUserId) return
+    let isCancelled = false
+    setIsLoadingCollections(true)
+    const includePrivateParam = isOwnProfile ? '1' : '0'
+    fetch(`/api/collections?userId=${encodeURIComponent(currentUserId)}&includePrivate=${includePrivateParam}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!isCancelled && Array.isArray(data?.collections)) {
+          setUserCollections(data.collections)
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to fetch user collections:', err)
+      })
+      .finally(() => {
+        if (!isCancelled) setIsLoadingCollections(false)
+      })
+
+    return () => {
+      isCancelled = true
+    }
+  }, [activeShelf, currentUserId, isOwnProfile, collectionsRefreshTrigger])
+
+  useEffect(() => {
+    if (!isExploreMode) return
+    let isCancelled = false
+    setIsLoadingCollections(true)
+    fetch('/api/collections?explore=true')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!isCancelled && Array.isArray(data?.collections)) {
+          setExploreCollections(data.collections)
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to fetch explore collections:', err)
+      })
+      .finally(() => {
+        if (!isCancelled) setIsLoadingCollections(false)
+      })
+
+    return () => {
+      isCancelled = true
+    }
+  }, [isExploreMode, collectionsRefreshTrigger])
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768)
@@ -258,18 +624,17 @@ function App() {
         currentPathUserId && nextUserId && currentPathUserId !== String(nextUserId),
       )
 
-      // Only redirect when going from root url not when on another profile page
-      const shouldRedirect = isInitialRootUrlRef.current && !isVisitingOtherProfile
-
-      if (shouldRedirect && nextUserId) {
-        isInitialRootUrlRef.current = false
-        setCurrentUserId(String(nextUserId))
-        setRequestedBookId('')
-        setSelectedBook(null)
-        window.history.replaceState({}, '', `/${nextUserId}`)
-        setBooksFetchTrigger((prev) => prev + 1)
+      if (!isVisitingOtherProfile && nextUserId) {
+        const normalizedNextId = String(nextUserId)
+        if (normalizedNextId !== String(currentUserId)) {
+          setCurrentUserId(normalizedNextId)
+        }
         if (finalName) {
           setUsername(finalName)
+        }
+        if (isInitialRootUrlRef.current) {
+          isInitialRootUrlRef.current = false
+          setIsExploreMode(true)
         }
       }
 
@@ -346,7 +711,8 @@ function App() {
         .then(({ data: { session } }) => {
           const user = session?.user ?? null
           setSupabaseUser(user)
-          if (user) {
+          if (user && syncedAuthUserIdRef.current !== user.id) {
+            syncedAuthUserIdRef.current = user.id
             syncUserProfileWithServer(user)
           }
         })
@@ -363,7 +729,12 @@ function App() {
         const user = session?.user ?? null
         setSupabaseUser(user)
         setIsCheckingAuth(false)
-        if (user) {
+        if (!user) {
+          syncedAuthUserIdRef.current = null
+          return
+        }
+        if (event === 'SIGNED_IN' || syncedAuthUserIdRef.current !== user.id) {
+          syncedAuthUserIdRef.current = user.id
           syncUserProfileWithServer(user, { hideModal: event === 'SIGNED_IN' })
         }
       })
@@ -381,53 +752,77 @@ function App() {
     try {
       const supabase = createClient()
       await supabase.auth.signOut()
+      syncedAuthUserIdRef.current = null
+      loadedUserIdRef.current = null
+      if (typeof document !== 'undefined') {
+        document.cookie = 'userId=; path=/; max-age=0; SameSite=Lax'
+      }
       setSupabaseUser(null)
+      setCookieUserId('')
+      setCurrentUserId('')
+      setUsername('')
+      setBooks([])
+      setUserCollections([])
+      setIsExploreMode(true)
+      setSelectedBook(null)
+      setActiveModalCollection(null)
+      setRequestedBookId('')
       setGeneratedProfileUrl('')
       setQrCodeDataUrl('')
+      window.history.pushState({}, '', '/')
     } catch (err) {
       console.error('Sign out error:', err)
     }
   }
 
   useEffect(() => {
-    if (isRootPath(window.location.pathname)) {
-      const initialId = getUserIdFromCookie() || DEFAULT_USER_ID
-      window.history.replaceState({}, '', `/${initialId}`)
-    }
-  }, [])
-
-  useEffect(() => {
     const syncRouteState = () => {
       const { userId, shelf, bookId } = getRouteStateFromPath(window.location.pathname)
 
-      if (isRootPath(window.location.pathname)) {
-        const fallbackId = cookieUserId || getUserIdFromCookie() || DEFAULT_USER_ID
-        window.history.replaceState({}, '', `/${fallbackId}`)
-        setCurrentUserId(fallbackId)
-      } else if (userId) {
-        setCurrentUserId(userId)
-      } else {
-        setCurrentUserId(DEFAULT_USER_ID)
+      if (isRootPath(window.location.pathname) || !userId) {
+        setIsExploreMode(true)
+        setRequestedBookId('')
+        setSelectedBook(null)
+        if (!isUserLoggedIn) {
+          setCurrentUserId('')
+        }
+        return
       }
 
+      setIsExploreMode(false)
+      setCurrentUserId(userId)
       setActiveShelf(shelf)
       setRequestedBookId(bookId)
     }
 
     window.addEventListener('popstate', syncRouteState)
     return () => window.removeEventListener('popstate', syncRouteState)
-  }, [cookieUserId])
+  }, [cookieUserId, isUserLoggedIn])
 
   useEffect(() => {
+    if (!currentUserId) {
+      loadedUserIdRef.current = null
+      setBooks([])
+      setIsLoading(false)
+      if (!supabaseUserRef.current) {
+        setUsername('')
+      }
+      return undefined
+    }
+
     const controller = new AbortController()
-    const resolvedUserId = currentUserId || DEFAULT_USER_ID
+    const resolvedUserId = currentUserId
     const apiUrl = buildGoodreadsApiUrl(resolvedUserId)
+    const isSwitchingUser = loadedUserIdRef.current !== resolvedUserId
 
     const loadBooks = async () => {
       try {
-        setIsLoading(true)
+        if (isSwitchingUser) {
+          setIsLoading(true)
+        }
         setError('')
         const { books: apiBooks, username: apiUsername } = await fetchBooksFromApi(apiUrl, controller.signal)
+        loadedUserIdRef.current = resolvedUserId
         setBooks(apiBooks)
         if (apiUsername) {
           setUsername(apiUsername)
@@ -563,10 +958,19 @@ function App() {
       setTargetShelf(loggedInUserBook.shelf)
       setSavedShelf(true)
     } else {
-      setTargetShelf('to-read')
+      const defaultShelf = SHELF_OPTIONS.some((s) => s.id === activeShelf) ? activeShelf : 'to-read'
+      setTargetShelf(defaultShelf)
       setSavedShelf(false)
     }
-  }, [selectedBook, loggedInUserBook])
+  }, [selectedBook, loggedInUserBook, activeShelf])
+
+  const shelfCounts = useMemo(() => {
+    const counts = {}
+    SHELF_OPTIONS.forEach((shelf) => {
+      counts[shelf.id] = books.filter((book) => matchesShelf(book, shelf.id)).length
+    })
+    return counts
+  }, [books])
 
   const shelfBooks = useMemo(() => {
     return books.filter((book) => matchesShelf(book, activeShelf))
@@ -659,158 +1063,7 @@ function App() {
       left: 0,
       behavior: 'auto',
     })
-  }, [activeShelf, visibleBooks.length])
-
-  useEffect(() => {
-    setPulledImagesCount(INITIAL_PULLED_IMAGES_COUNT)
-  }, [activeShelf, activeAuthorFilter, activeBookSort])
-
-  useEffect(() => {
-    if (!visibleBooks.length) return
-
-    const candidateBooks = visibleBooks.slice(0, pulledImagesCount)
-
-    const booksToSync = candidateBooks.filter((b) => {
-      const cleanIsbn13 = String(b.isbn13 || (b.isbn?.length === 13 ? b.isbn : '') || '').replace(/[^0-9X]/gi, '').trim()
-      const cleanIsbn10 = String(b.isbn10 || (b.isbn?.length === 10 ? b.isbn : '') || '').replace(/[^0-9X]/gi, '').trim()
-      const syncKey = cleanIsbn13 || cleanIsbn10 || String(b.isbn || '').replace(/[^0-9X]/gi, '').trim()
-      return (
-        syncKey.length >= 8 &&
-        b.imageUrl &&
-        b.imageUrl.includes('openlibrary.org') &&
-        !syncedCoversRef.current.has(syncKey)
-      )
-    })
-
-    if (!booksToSync.length) return
-
-    let isCancelled = false
-
-    const syncCovers = async () => {
-      for (const book of booksToSync) {
-        if (isCancelled) break
-        const cleanIsbn13 = String(book.isbn13 || (book.isbn?.length === 13 ? book.isbn : '') || '').replace(/[^0-9X]/gi, '').trim()
-        const cleanIsbn10 = String(book.isbn10 || (book.isbn?.length === 10 ? book.isbn : '') || '').replace(/[^0-9X]/gi, '').trim()
-        const primaryIsbn = cleanIsbn13 || cleanIsbn10 || String(book.isbn || '').replace(/[^0-9X]/gi, '').trim()
-
-        if (primaryIsbn) syncedCoversRef.current.add(primaryIsbn)
-        if (cleanIsbn13) syncedCoversRef.current.add(cleanIsbn13)
-        if (cleanIsbn10) syncedCoversRef.current.add(cleanIsbn10)
-
-        // Try OpenLibrary with ISBN-13 first, then ISBN-10, then existing image URL
-        const candidateUrls = [
-          cleanIsbn13 ? `https://covers.openlibrary.org/b/isbn/${cleanIsbn13}-L.jpg` : null,
-          cleanIsbn10 && cleanIsbn10 !== cleanIsbn13 ? `https://covers.openlibrary.org/b/isbn/${cleanIsbn10}-L.jpg` : null,
-          book.imageUrl && !book.imageUrl.includes('goodreads.com') && !book.imageUrl.includes('ssl-images-amazon.com')
-            ? book.imageUrl
-            : null,
-        ].filter(Boolean)
-
-        let loadedBlob = null
-
-        for (const testUrl of candidateUrls) {
-          try {
-            const imgRes = await fetch(testUrl)
-            if (!imgRes.ok) continue
-
-            const blob = await imgRes.blob()
-            // OpenLibrary returns 1x1 gif (< 1000 bytes) if image is missing
-            if (blob.size < 1000 && blob.type.includes('gif')) continue
-            if (blob.size === 0 || blob.type.includes('html')) continue
-
-            loadedBlob = blob
-            break
-          } catch {
-            // Try next candidate url
-          }
-        }
-
-        // Fallback: If OpenLibrary didn't have the cover (for either ISBN13 or ISBN10), query Google Books API via /api/isbn
-        if (!loadedBlob && (book.title || primaryIsbn)) {
-          try {
-            const searchParams = new URLSearchParams()
-            if (book.title) searchParams.set('title', book.title)
-            if (book.author) searchParams.set('author', book.author)
-            if (primaryIsbn) searchParams.set('isbn', primaryIsbn)
-            const googleRes = await fetch(`/api/isbn?${searchParams.toString()}`)
-            if (googleRes.ok) {
-              const googleData = await googleRes.json()
-              if (googleData?.coverUrl) {
-                const imgRes = await fetch(googleData.coverUrl)
-                if (imgRes.ok) {
-                  const blob = await imgRes.blob()
-                  if (blob.size >= 1000 && !blob.type.includes('html')) {
-                    loadedBlob = blob
-                  }
-                }
-              }
-            }
-          } catch (googleErr) {
-            console.warn('Google Books fallback failed for:', book.title, googleErr)
-          }
-        }
-
-        if (!loadedBlob) continue
-
-        // Immediately display the loaded cover on the book
-        const localCoverUrl = URL.createObjectURL(loadedBlob)
-        if (!isCancelled) {
-          setBooks((prev) =>
-            prev.map((b) => (b.id === book.id || b.isbn === book.isbn ? { ...b, imageUrl: localCoverUrl } : b)),
-          )
-          setSelectedBook((prev) =>
-            prev && (prev.id === book.id || prev.isbn === book.isbn) ? { ...prev, imageUrl: localCoverUrl } : prev,
-          )
-        }
-
-        try {
-          const dataUrl = await new Promise((resolve, reject) => {
-            const reader = new FileReader()
-            reader.onloadend = () => resolve(reader.result)
-            reader.onerror = reject
-            reader.readAsDataURL(loadedBlob)
-          })
-
-          const uploadRes = await fetch(`/api/cover?isbn=${encodeURIComponent(primaryIsbn)}`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              isbn: primaryIsbn,
-              dataUrl,
-            }),
-          })
-
-          if (uploadRes.ok) {
-            const data = await uploadRes.json()
-            if (data?.url && !isCancelled) {
-              setBooks((prev) =>
-                prev.map((b) => (b.id === book.id || b.isbn === book.isbn ? { ...b, imageUrl: data.url } : b)),
-              )
-              setSelectedBook((prev) =>
-                prev && (prev.id === book.id || prev.isbn === book.isbn) ? { ...prev, imageUrl: data.url } : prev,
-              )
-              URL.revokeObjectURL(localCoverUrl)
-            }
-          } else {
-            const errorText = await uploadRes.text()
-            console.warn('Cover upload failed:', errorText)
-          }
-        } catch (err) {
-          console.warn('Failed to persist cover to server:', book.title, err)
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 250))
-      }
-    }
-
-    syncCovers()
-
-    return () => {
-      isCancelled = true
-    }
-  }, [visibleBooks, pulledImagesCount])
+  }, [activeShelf, currentUserId])
 
   const renderStars = (rating) => {
     const filledStars = Math.round(rating || 0)
@@ -889,6 +1142,15 @@ function App() {
       return
     }
 
+    if (activeModalCollection) {
+      setActiveModalCollection(null)
+      setSelectedBook(null)
+      setRequestedBookId('')
+      setShelfDropdownOpen(false)
+      setSavedShelf(false)
+      return
+    }
+
     const routePath = currentUserId ? `/${currentUserId}/${activeShelf}` : '/'
     window.history.pushState({}, '', routePath)
     setRequestedBookId('')
@@ -926,32 +1188,223 @@ function App() {
     }
   }
 
+  const handleCreateCollection = async (e) => {
+    if (e) e.preventDefault()
+    const title = newCollectionTitle.trim()
+    const description = newCollectionDescription.trim().slice(0, 140)
+    const activeUser = cookieUserId || getUserIdFromCookie()
+    if (!title || !activeUser) return
+
+    try {
+      setIsCreatingCollection(true)
+      const response = await fetch('/api/collections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create',
+          userId: activeUser,
+          title,
+          description,
+          isPrivate: newCollectionIsPrivate,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(`Failed to create collection: status ${response.status}`)
+      }
+      const data = await response.json()
+      if (data?.collection) {
+        setUserCollections((prev) => [{ ...data.collection, username, books: [] }, ...prev])
+      }
+      setNewCollectionTitle('')
+      setNewCollectionDescription('')
+      setNewCollectionIsPrivate(false)
+      setShowNewCollectionInput(false)
+      setCollectionsRefreshTrigger((prev) => prev + 1)
+    } catch (err) {
+      console.error('Error creating collection:', err)
+    } finally {
+      setIsCreatingCollection(false)
+    }
+  }
+
+  const handleDeleteCollection = async (collection) => {
+    const activeUser = cookieUserId || getUserIdFromCookie()
+    if (!collection?.id || !activeUser) return
+
+    try {
+      const response = await fetch('/api/collections', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: activeUser,
+          collectionId: collection.id,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(`Failed to delete collection: status ${response.status}`)
+      }
+      setUserCollections((prev) => prev.filter((c) => Number(c.id) !== Number(collection.id)))
+      setExploreCollections((prev) => prev.filter((c) => Number(c.id) !== Number(collection.id)))
+    } catch (err) {
+      console.error('Error deleting collection:', err)
+    }
+  }
+
+  const handleOpenAddBookForCollection = (collection) => {
+    setTargetCollectionForSearch(collection)
+    setSearchError('')
+    setIsSearchModalOpen(true)
+  }
+
+  const handleAddBookToCollectionFromSearch = async (book) => {
+    const activeUser = cookieUserId || getUserIdFromCookie()
+    if (!targetCollectionForSearch?.id || !activeUser || !book || isAddingBookToCollection) return
+
+    const bookId = String(book.bookId || book.id || '')
+    if (!bookId) return
+
+    try {
+      setIsAddingBookToCollection(true)
+      const response = await fetch('/api/collections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'add-book',
+          userId: activeUser,
+          collectionId: targetCollectionForSearch.id,
+          bookId,
+          book: {
+            bookId,
+            title: book.title,
+            author: book.author,
+            isbn: book.isbn,
+            pages: book.pages,
+            publishedYear: book.publishedYear,
+            publisher: book.publisher,
+            binding: book.binding,
+            description: book.description,
+            mainCategory: book.mainCategory,
+            coverUrl: book.imageUrl || book.coverUrl,
+          },
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to add book to collection: status ${response.status}`)
+      }
+
+      const normalizedAddedBook = normalizeCsvBook(book, 0)
+      const updateCollectionBooks = (list) =>
+        list.map((c) => {
+          if (Number(c.id) !== Number(targetCollectionForSearch.id)) return c
+          const existingBooks = Array.isArray(c.books) ? c.books : []
+          if (existingBooks.some((b) => String(b.bookId || b.id) === bookId)) return c
+          return {
+            ...c,
+            books: [...existingBooks, normalizedAddedBook],
+          }
+        })
+
+      setUserCollections(updateCollectionBooks)
+      setExploreCollections(updateCollectionBooks)
+      setIsSearchModalOpen(false)
+      setTargetCollectionForSearch(null)
+    } catch (err) {
+      console.error('Error adding book to collection:', err)
+      setSearchError('Nu am putut adăuga cartea în colecție.')
+    } finally {
+      setIsAddingBookToCollection(false)
+    }
+  }
+
+  const handleRemoveBookFromActiveCollection = async () => {
+    const activeUser = cookieUserId || getUserIdFromCookie()
+    if (!activeModalCollection?.id || !selectedBook || !activeUser) return
+    const bookId = String(selectedBook.bookId || selectedBook.id || '')
+    if (!bookId) return
+
+    try {
+      setIsRemovingFromCollection(true)
+      const response = await fetch('/api/collections', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: activeUser,
+          collectionId: activeModalCollection.id,
+          bookId,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(`Failed to remove book from collection: status ${response.status}`)
+      }
+
+      const removeBookFn = (list) =>
+        list.map((c) => {
+          if (Number(c.id) !== Number(activeModalCollection.id)) return c
+          return {
+            ...c,
+            books: (c.books || []).filter((b) => String(b.bookId || b.id) !== bookId),
+          }
+        })
+
+      setUserCollections(removeBookFn)
+      setExploreCollections(removeBookFn)
+      closeBookDetails()
+    } catch (err) {
+      console.error('Error removing book from collection:', err)
+    } finally {
+      setIsRemovingFromCollection(false)
+    }
+  }
+
+  const handleOpenCollectionBook = (book, collection) => {
+    if (!book || !collection) return
+    setActiveModalCollection(collection)
+    setSelectedBook(book)
+    setError('')
+  }
+
+  const handleSelectExploreCreator = (creatorUserId) => {
+    if (!creatorUserId) return
+    setIsExploreMode(false)
+    setActiveShelf('collections')
+    setCurrentUserId(String(creatorUserId))
+    setRequestedBookId('')
+    setSelectedBook(null)
+    setActiveModalCollection(null)
+    window.history.pushState({}, '', `/${creatorUserId}/collections`)
+    setBooksFetchTrigger((prev) => prev + 1)
+  }
+
   const handleSelectSearchBook = (book) => {
+    if (targetCollectionForSearch) {
+      handleAddBookToCollectionFromSearch(book)
+      return
+    }
     setOpenedFromSearch(true)
     setSelectedBook(book)
   }
 
   const handleHeaderClick = () => {
-    const loggedInId = cookieUserId || getUserIdFromCookie() || DEFAULT_USER_ID
-    if (!loggedInId) return
+    setIsExploreMode(true)
+    setActiveModalCollection(null)
+    setRequestedBookId('')
+    setSelectedBook(null)
+    setActiveAuthorFilter('all')
 
-    if (
-      currentUserId === loggedInId &&
-      !selectedBook &&
-      activeShelf === 'read' &&
-      activeAuthorFilter === 'all'
-    ) {
+    if (!isUserLoggedIn) {
+      setCurrentUserId('')
+      setUsername('')
+      setBooks([])
+      window.history.pushState({}, '', '/')
       return
     }
 
-    const nextPath = `/${loggedInId}`
-    window.history.pushState({}, '', nextPath)
-    setCurrentUserId(String(loggedInId))
-    setRequestedBookId('')
-    setSelectedBook(null)
-    setActiveShelf('read')
-    setActiveAuthorFilter('all')
-    setBooksFetchTrigger((prev) => prev + 1)
+    const loggedInId = cookieUserId || getUserIdFromCookie() || currentUserId
+    if (loggedInId) {
+      setCurrentUserId(String(loggedInId))
+    }
+    window.history.pushState({}, '', '/')
   }
 
   const handleSaveBookToShelf = async (shelfToSave = targetShelf) => {
@@ -1073,8 +1526,8 @@ function App() {
   }
 
   const handleJumpBook = (delta = 1, { saveToRead = false } = {}) => {
-    if (!books.length || !selectedBook) return
-    const curIdx = books.findIndex(
+    if (!modalBookList.length || !selectedBook) return
+    const curIdx = modalBookList.findIndex(
       (b) => String(b.bookId || b.id) === String(selectedBook.bookId || selectedBook.id),
     )
     if (curIdx === -1) return
@@ -1089,7 +1542,7 @@ function App() {
         return
       }
 
-      if (!cookieUserId || cookieUserId !== currentUserId) {
+      if (isSwipableModal) {
         const bookId = String(bookToSave.bookId || bookToSave.id || '')
         if (bookId) {
           fetch('/api/shelves', {
@@ -1108,6 +1561,9 @@ function App() {
                 publishedYear: bookToSave.publishedYear,
                 publisher: bookToSave.publisher,
                 binding: bookToSave.binding,
+                description: bookToSave.description,
+                mainCategory: bookToSave.mainCategory,
+                coverUrl: bookToSave.imageUrl || bookToSave.coverUrl,
               },
             }),
           })
@@ -1137,21 +1593,23 @@ function App() {
     }
 
     const nextIndex = curIdx + delta
-    if (nextIndex >= books.length || nextIndex < 0) {
+    if (nextIndex >= modalBookList.length || nextIndex < 0) {
       closeBookDetails()
       return
     }
 
-    const nextBook = books[nextIndex]
+    const nextBook = modalBookList[nextIndex]
     if (!nextBook) {
       closeBookDetails()
       return
     }
 
     const nextBookId = String(nextBook.bookId || nextBook.id)
-    const nextShelf = nextBook.bookshelves || activeShelf
-    window.history.replaceState({}, '', `/${currentUserId}/${nextShelf}/${encodeURIComponent(nextBookId)}`)
-    setRequestedBookId(nextBookId)
+    if (!activeModalCollection) {
+      const nextShelf = nextBook.bookshelves || activeShelf
+      window.history.replaceState({}, '', `/${currentUserId}/${nextShelf}/${encodeURIComponent(nextBookId)}`)
+      setRequestedBookId(nextBookId)
+    }
     setSelectedBook(nextBook)
     setShelfDropdownOpen(false)
   }
@@ -1247,7 +1705,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (!selectedBook && !isSearchModalOpen) return undefined
+    if (!selectedBook && !isSearchModalOpen && !showNewCollectionInput) return undefined
 
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
@@ -1255,11 +1713,17 @@ function App() {
           closeBookDetails()
         } else if (isSearchModalOpen) {
           setIsSearchModalOpen(false)
+          setTargetCollectionForSearch(null)
+        } else if (showNewCollectionInput) {
+          setShowNewCollectionInput(false)
+          setNewCollectionTitle('')
+          setNewCollectionDescription('')
+          setNewCollectionIsPrivate(false)
         }
         return
       }
 
-      if (!isOtherUserProfile || !selectedBook) return
+      if (!isSwipableModal || !selectedBook) return
 
       if (event.key === 'ArrowRight') {
         event.preventDefault()
@@ -1272,7 +1736,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedBook, isSearchModalOpen, isOtherUserProfile, books, modalSwipeExit, cookieUserId, currentUserId, supabaseUser, openedFromSearch])
+  }, [selectedBook, isSearchModalOpen, showNewCollectionInput, isSwipableModal, modalBookList, modalSwipeExit, cookieUserId, currentUserId, supabaseUser, openedFromSearch, activeModalCollection])
 
   const modalRotation = useMemo(() => {
     if (modalSwipeExit === 'right') return 16
@@ -1601,35 +2065,12 @@ function App() {
     const carousel = carouselRef.current
     syncBookCoverFocus()
 
-    const updatePulledCount = () => {
-      if (!carouselRef.current) return
-      const carouselEl = carouselRef.current
-      const carouselRect = carouselEl.getBoundingClientRect()
-      const cards = carouselEl.querySelectorAll('.book-card')
-      let lastVisibleIndex = 0
-
-      for (let i = 0; i < cards.length; i += 1) {
-        const rect = cards[i].getBoundingClientRect()
-        if (rect.left < carouselRect.right) {
-          lastVisibleIndex = i
-        } else {
-          break
-        }
-      }
-
-      const neededCount = Math.max(INITIAL_PULLED_IMAGES_COUNT, lastVisibleIndex + 1 + IMAGES_PULL_AHEAD)
-      setPulledImagesCount((prev) => (neededCount > prev ? neededCount : prev))
-    }
-
-    updatePulledCount()
-
     const handleScroll = () => {
       lastScrollTimeRef.current = Date.now()
       if (dragState.current.active) {
         pointerDragRef.current.hasMoved = true
       }
       syncBookCoverFocus()
-      updatePulledCount()
     }
 
     carousel.addEventListener('scroll', handleScroll, { passive: true })
@@ -1643,36 +2084,10 @@ function App() {
         rafIdRef.current = null
       }
     }
-  }, [visibleBooks.length, activeShelf, activeAuthorFilter, activeBookSort])
+  }, [isLoading, visibleBooks.length, activeShelf, activeAuthorFilter, activeBookSort])
 
   return (
     <div style={{ position: 'relative', minHeight: '100vh', width: '100%', overflowX: 'hidden' }}>
-      <div style={{ width: '100%', height: '600px', position: 'absolute', top: 0, left: 0, zIndex: 0, pointerEvents: 'none' }}>
-        <GradientASCII
-          colors={["#4f8ff7", "#e8f0ff", "#b4d0ff", "#7cb4fb"]}
-          shape="horizon"
-          characters="abcdefghijklmnopqrstuvwxyz!@#()_+~`|}{[]:;?><,./-="
-          cellSize={18}
-          density={0.94}
-          glyphOpacity={0.61}
-          glow={0}
-          depthOfField={0}
-          flicker={0.3}
-          softness={0.08}
-          scale={2.1}
-          flow={2}
-          speed={0.25}
-          gradientOpacity={0.9}
-          grain={0.04}
-          variation={0}
-          mouseInteraction
-          scrambleRadius={0.1}
-          clickEffect="wave"
-          intro
-          lightMode
-        />
-      </div>
-
       <main className="app-shell" style={{ position: 'relative', zIndex: 1 }}>
         <header className="library-header">
           <div
@@ -1688,7 +2103,7 @@ function App() {
             tabIndex={0}
             title="Mergi la pagina ta principală"
           >
-            {username ? (
+            {isUserLoggedIn && username ? (
               <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
                 Ce mai citește <span className="text-violet-300">{username}</span>
               </h1>
@@ -1699,7 +2114,7 @@ function App() {
             )}
           </div>
 
-          {yearlySummary.count > 5 && yearlySummary.totalPages > 0 ? (
+          {isUserLoggedIn && yearlySummary.count > 5 && yearlySummary.totalPages > 0 ? (
             <div className="reading-summary book-detail-label" aria-live="polite">
               <span>{yearlySummary.count} cărți citite în 2026</span>
               <span>// {yearlySummary.totalPages.toLocaleString()} pagini</span>
@@ -1707,69 +2122,152 @@ function App() {
           ) : null
           }
 
-          {username ? (
-            <div className="shelf-pills" aria-label="Book shelves">
-              <GooeyNav
-                items={SHELF_OPTIONS.map((shelf) => ({ label: shelf.label }))}
-                activeIndex={Math.max(0, SHELF_OPTIONS.findIndex((shelf) => shelf.id === activeShelf))}
-                onChange={(index) => {
-                  const shelf = SHELF_OPTIONS[index]
+          <div className="shelf-pills" aria-label="Book shelves">
+            <RubberSegment
+              items={TOP_NAV_OPTIONS.map((item) => ({
+                value: item.id,
+                label: item.label,
+                icon: item.icon,
+              }))}
+              value={isExploreMode ? 'explore' : activeShelf === 'collections' ? 'collections' : 'shelves'}
+              onChange={(value) => {
+                const item = TOP_NAV_OPTIONS.find((opt) => opt.id === value)
+                if (!item) return
+                if (!isUserLoggedIn && item.id !== 'explore') {
+                  setShowProfileModal(true)
+                  return
+                }
+                setSelectedBook(null)
+                setActiveModalCollection(null)
+                setRequestedBookId('')
+                if (item.id === 'explore') {
+                  setIsExploreMode(true)
+                  window.history.pushState({}, '', '/')
+                  return
+                }
+                setIsExploreMode(false)
+                const activeUser = currentUserId || cookieUserId || getUserIdFromCookie()
+                if (activeUser && activeUser !== currentUserId) {
+                  setCurrentUserId(String(activeUser))
+                }
+                if (item.id === 'collections') {
+                  setActiveShelf('collections')
+                  const nextPath = activeUser ? `/${activeUser}/collections` : '/collections'
+                  window.history.pushState({}, '', nextPath)
+                  return
+                }
+                const targetShelf =
+                  activeShelf === 'collections' ? lastBookShelfRef.current || 'read' : activeShelf
+                setActiveShelf(targetShelf)
+                const nextPath = activeUser ? `/${activeUser}/${targetShelf}` : `/${targetShelf}`
+                window.history.pushState({}, '', nextPath)
+              }}
+              trackColor="rgba(38, 35, 46, 0.76)"
+              thumbColor="#8b5cf6"
+              textColor="#f4f4f5"
+              activeTextColor="#ffffff"
+              size="lg"
+              radius={10}
+              inset={3}
+              equalSlots
+              stretch={100}
+              squash={3}
+              speed={1}
+              glide={75}
+              draggable
+            />
+            {currentUserId && !isExploreMode && activeShelf !== 'collections' ? (
+              <JellyRadio
+                items={SHELF_OPTIONS.map((shelf) => ({
+                  value: shelf.id,
+                  label: `${shelf.label} (${shelfCounts[shelf.id] ?? 0})`,
+                }))}
+                value={activeShelf}
+                onChange={(value) => {
+                  const shelf = SHELF_OPTIONS.find((s) => s.id === value)
                   if (!shelf) return
+                  setIsExploreMode(false)
+                  setActiveModalCollection(null)
                   setActiveShelf(shelf.id)
                   const nextPath = currentUserId ? `/${currentUserId}/${shelf.id}` : `/${shelf.id}`
                   window.history.pushState({}, '', nextPath)
                   setRequestedBookId('')
                   setSelectedBook(null)
                 }}
-                theme="dark"
-                color="#8b5cf6"
+                chipColor="rgba(38, 35, 46, 0.76)"
+                activeColor="#8b5cf6"
+                textColor="#f4f4f5"
+                activeTextColor="#ffffff"
                 size="md"
-                initialActiveIndex={0}
-                frame
-                particleCount={8}
-                spread={28}
-                animationTime={520}
-                timeVariance={300}
-                gooeyness={0.5}
-                wobble={0.2}
-                hoverEffect
+                gap={8}
+                radius={18}
+                swell={0.2}
+                barge={6}
+                shrink={0.05}
+                jelly={1}
+                bounce={0.25}
+                stagger={22}
+                stiffness={580}
+                ariaLabel="Rafturi de cărți"
               />
-            </div>
-          ) : null}
+            ) : currentUserId && !isExploreMode && activeShelf === 'collections' ? (
+              <JellyRadio
+                items={COLLECTION_FILTER_OPTIONS.map((opt) => ({
+                  value: opt.id,
+                  label: `${opt.label} (${collectionCounts[opt.id] ?? 0})`,
+                }))}
+                value={activeCollectionFilter}
+                onChange={(value) => setActiveCollectionFilter(value)}
+                chipColor="rgba(38, 35, 46, 0.76)"
+                activeColor="#8b5cf6"
+                textColor="#f4f4f5"
+                activeTextColor="#ffffff"
+                size="md"
+                gap={8}
+                radius={18}
+                swell={0.2}
+                barge={6}
+                shrink={0.05}
+                jelly={1}
+                bounce={0.25}
+                stagger={22}
+                stiffness={580}
+                ariaLabel="Filtru colecții"
+              />
+            ) : null}
+          </div>
 
         </header>
 
         {selectedBook ? (
           <div className="book-detail-backdrop" onClick={closeBookDetails}>
             <div
-              ref={isOtherUserProfile ? modalCardRef : undefined}
-              className={`book-detail-modal ${
-                isOtherUserProfile
-                  ? `swipable ${modalPointerRef.current?.isDragging ? 'is-dragging' : ''} ${
-                      modalSwipeExit ? `modal-fly-out-${modalSwipeExit}` : ''
-                    }`
-                  : ''
-              }`}
+              ref={isSwipableModal ? modalCardRef : undefined}
+              className={`book-detail-modal ${isSwipableModal
+                ? `swipable ${modalPointerRef.current?.isDragging ? 'is-dragging' : ''} ${modalSwipeExit ? `modal-fly-out-${modalSwipeExit}` : ''
+                }`
+                : ''
+                }`}
               style={
-                isOtherUserProfile
+                isSwipableModal
                   ? {
-                      transform: modalSwipeExit
-                        ? undefined
-                        : `translate3d(${modalDragOffset.x}px, ${modalDragOffset.y}px, 0) rotate(${modalRotation}deg)`,
-                      transition: modalPointerRef.current?.isDragging
-                        ? 'none'
-                        : 'transform 0.28s cubic-bezier(0.18, 0.89, 0.32, 1.15)',
-                    }
+                    transform: modalSwipeExit
+                      ? undefined
+                      : `translate3d(${modalDragOffset.x}px, ${modalDragOffset.y}px, 0) rotate(${modalRotation}deg)`,
+                    transition: modalPointerRef.current?.isDragging
+                      ? 'none'
+                      : 'transform 0.28s cubic-bezier(0.18, 0.89, 0.32, 1.15)',
+                  }
                   : undefined
               }
-              onPointerDown={isOtherUserProfile ? handleModalPointerDown : undefined}
-              onPointerMove={isOtherUserProfile ? handleModalPointerMove : undefined}
-              onPointerUp={isOtherUserProfile ? handleModalPointerUp : undefined}
-              onPointerCancel={isOtherUserProfile ? handleModalPointerUp : undefined}
+              onPointerDown={isSwipableModal ? handleModalPointerDown : undefined}
+              onPointerMove={isSwipableModal ? handleModalPointerMove : undefined}
+              onPointerUp={isSwipableModal ? handleModalPointerUp : undefined}
+              onPointerCancel={isSwipableModal ? handleModalPointerUp : undefined}
               onClick={(event) => event.stopPropagation()}
             >
-              {/* Swipe Left & Right Overlay Stamps (Other user's books only) */}
-              {isOtherUserProfile && (
+              {/* Swipe Left & Right Overlay Stamps (Other user's books or collections) */}
+              {isSwipableModal && (
                 <>
                   <div
                     className="book-modal-stamp book-modal-stamp-right"
@@ -1815,16 +2313,14 @@ function App() {
                 <div className="book-detail-top-section">
                   <div className="book-detail-cover-col">
                     <div className="book-detail-cover">
-                      <img
-                        src={
-                          selectedBook.imageUrl && !selectedBook.imageUrl.includes('goodreads.com') && !selectedBook.imageUrl.includes('ssl-images-amazon.com')
-                            ? selectedBook.imageUrl
-                            : (selectedBook.isbn13 || selectedBook.isbn)
-                              ? `https://covers.openlibrary.org/b/isbn/${String(selectedBook.isbn13 || selectedBook.isbn).replace(/[^0-9X]/gi, '').trim()}-L.jpg`
-                              : ''
-                        }
-                        alt={`${selectedBook.title} cover`}
-                      />
+                      {selectedBook.imageUrl ? (
+                        <img
+                          src={selectedBook.imageUrl}
+                          alt={`${selectedBook.title} cover`}
+                        />
+                      ) : (
+                        <div className="book-cover-placeholder" aria-hidden="true" />
+                      )}
                     </div>
 
                     <div className="book-detail-shelf-action" ref={shelfDropdownRef}>
@@ -1909,6 +2405,21 @@ function App() {
                         </>
                       )}
                     </div>
+
+                    {isOwnCollectionModal ? (
+                      <button
+                        type="button"
+                        className="book-collection-remove-btn"
+                        disabled={isRemovingFromCollection}
+                        onClick={handleRemoveBookFromActiveCollection}
+                        title={`Elimină din colecția „${activeModalCollection.title}”`}
+                      >
+                        <Trash2 size={14} />
+                        <span>
+                          {isRemovingFromCollection ? 'Se elimină...' : 'Elimină din colecție'}
+                        </span>
+                      </button>
+                    ) : null}
                   </div>
 
                   <div className="book-detail-meta-col">
@@ -1966,344 +2477,398 @@ function App() {
               </div>
             </div>
           </div>
-        ) : null}
+        ) : null
+        }
 
-        {showProfileModal ? (
-          <div className="profile-modal-backdrop" onClick={() => setShowProfileModal(false)}>
-            <div className="profile-modal" onClick={(event) => event.stopPropagation()}>
-              <div className="profile-modal-header">
-                {supabaseUser ? (
-                  <div className="profile-modal-user-header">
-                    <div className="profile-user-badge profile-modal-label">
-                      <span className="profile-user-email">{supabaseUser.email}</span>
+        {
+          showProfileModal ? (
+            <div className="profile-modal-backdrop" onClick={() => setShowProfileModal(false)}>
+              <div className="profile-modal" onClick={(event) => event.stopPropagation()}>
+                <div className="profile-modal-header">
+                  {supabaseUser ? (
+                    <div className="profile-modal-user-header">
+                      <div className="profile-user-badge profile-modal-label">
+                        <span className="profile-user-email">{supabaseUser.email}</span>
+                      </div>
+
+                      <button
+                        type="button"
+                        className="profile-modal-logout-btn"
+                        onClick={handleSignOut}
+                        title="Deconectare din cont"
+                      >
+                        <LogOut size={14} />
+                        Deconectare
+                      </button>
                     </div>
+                  ) : (
+                    <div className="profile-modal-header-spacer" />
+                  )}
+                  <button
+                    type="button"
+                    className="toolbar-clear-button"
+                    onClick={() => setShowProfileModal(false)}
+                    aria-label="Close profile URL popup"
+                  >
+                    ×
+                  </button>
+                </div>
 
-                    <button
-                      type="button"
-                      className="profile-modal-logout-btn"
-                      onClick={handleSignOut}
-                      title="Deconectare din cont"
-                    >
-                      <LogOut size={14} />
-                      Deconectare
-                    </button>
-                  </div>
+                {!supabaseUser ? (
+                  <AuthModalView
+                    onSuccess={(user) => {
+                      setShowProfileModal(false)
+                      if (user) {
+                        setSupabaseUser(user)
+                        syncUserProfileWithServer(user, { hideModal: true })
+                      }
+                    }}
+                  />
                 ) : (
-                  <div className="profile-modal-header-spacer" />
-                )}
-                <button
-                  type="button"
-                  className="toolbar-clear-button"
-                  onClick={() => setShowProfileModal(false)}
-                  aria-label="Close profile URL popup"
-                >
-                  ×
-                </button>
-              </div>
-
-              {!supabaseUser ? (
-                <AuthModalView
-                  onSuccess={(user) => {
-                    setShowProfileModal(false)
-                    if (user) {
-                      setSupabaseUser(user)
-                      syncUserProfileWithServer(user, { hideModal: true })
-                    }
-                  }}
-                />
-              ) : (
-                <>
-                  <form className="profile-modal-form" onSubmit={handleUploadCsvSubmit}>
-                    <div className="profile-modal-field">
-                      <label htmlFor="profile-display-name-input" className="profile-modal-label">
-                        Numele tău
-                      </label>
-                      <div className="profile-name-input-wrapper">
-                        <input
-                          ref={nameInputRef}
-                          id="profile-display-name-input"
-                          type="text"
-                          required
-                          aria-required="true"
-                          pattern=".*\S.*"
-                          value={displayNameInput}
-                          onChange={(event) => {
-                            setDisplayNameInput(event.target.value)
-                            setUploadError('')
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') {
-                              event.preventDefault()
-                              handleSaveDisplayName()
-                            }
-                          }}
-                          placeholder="ex: Alin"
-                          className="profile-modal-input profile-modal-input-with-action"
-                        />
-                        <button
-                          type="button"
-                          className={`profile-name-save-icon-btn ${savedName ? 'saved' : ''}`}
-                          onClick={handleSaveDisplayName}
-                          disabled={isSavingName || !displayNameInput.trim()}
-                          aria-label="Salvează numele"
-                          title={savedName ? 'Salvat!' : 'Salvează numele'}
-                        >
-                          {savedName ? <Check size={16} /> : <Save size={16} />}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="profile-modal-field">
-                      <label htmlFor="profile-csv-input" className="profile-modal-label">
-                        Librărie Goodreads
-                      </label>
-                      <label htmlFor="profile-csv-input" className="profile-file-upload">
-                        <Upload size={16} strokeWidth={2} aria-hidden="true" />
-                        <span className="profile-file-upload-text">
-                          {csvFile ? csvFile.name : 'Încarcă fișierul CSV exportat...'}
-                        </span>
-                      </label>
-                      <input
-                        id="profile-csv-input"
-                        type="file"
-                        accept=".csv,text/csv"
-                        onChange={handleCsvFileChange}
-                        className="profile-file-input-hidden"
-                      />
-                    </div>
-
-                    {uploadError ? <p className="profile-modal-error">{uploadError}</p> : null}
-
-                    <button
-                      type="submit"
-                      className="profile-modal-submit"
-                      disabled={isUploadingCsv || !displayNameInput.trim() || !csvFile}
-                    >
-                      {isUploadingCsv
-                        ? 'Se încarcă...'
-                        : (cookieUserId ? 'Actualizează librăria' : 'Generează URL')}
-                    </button>
-                  </form>
-
-                  {generatedProfileUrl ? (
-                    <div className="profile-url-result">
-                      <label className="profile-modal-label">
-                        URL-ul tău pe 'Ce mai citim'
-                      </label>
-                      <div className="profile-url-field">
-                        <a
-                          href={generatedProfileUrl}
-                          className="profile-url-text"
-                          onClick={() => setShowProfileModal(false)}
-                          title="Mergi la librăria ta"
-                        >
-                          {generatedProfileUrl}
-                        </a>
-                        <button
-                          type="button"
-                          className={`profile-url-copy-icon-btn ${copiedUrl ? 'copied' : ''}`}
-                          onClick={handleCopyGeneratedUrl}
-                          aria-label="Copiază linkul"
-                          title={copiedUrl ? 'Copiat!' : 'Copiază linkul'}
-                        >
-                          {copiedUrl ? <Check size={16} /> : <Copy size={16} />}
-                        </button>
-                      </div>
-
-                      {qrCodeDataUrl ? (
-                        <div className="profile-qr-wrapper">
-                          <img src={qrCodeDataUrl} alt="QR code for generated website URL" className="profile-qr-image" />
+                  <>
+                    <form className="profile-modal-form" onSubmit={handleUploadCsvSubmit}>
+                      <div className="profile-modal-field">
+                        <label htmlFor="profile-display-name-input" className="profile-modal-label">
+                          Numele tău
+                        </label>
+                        <div className="profile-name-input-wrapper">
+                          <input
+                            ref={nameInputRef}
+                            id="profile-display-name-input"
+                            type="text"
+                            required
+                            aria-required="true"
+                            pattern=".*\S.*"
+                            value={displayNameInput}
+                            onChange={(event) => {
+                              setDisplayNameInput(event.target.value)
+                              setUploadError('')
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                handleSaveDisplayName()
+                              }
+                            }}
+                            placeholder="ex: Alin"
+                            className="profile-modal-input profile-modal-input-with-action"
+                          />
+                          <button
+                            type="button"
+                            className={`profile-name-save-icon-btn ${savedName ? 'saved' : ''}`}
+                            onClick={handleSaveDisplayName}
+                            disabled={isSavingName || !displayNameInput.trim()}
+                            aria-label="Salvează numele"
+                            title={savedName ? 'Salvat!' : 'Salvează numele'}
+                          >
+                            {savedName ? <Check size={16} /> : <Save size={16} />}
+                          </button>
                         </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </>
-              )}
+                      </div>
+
+                      <div className="profile-modal-field">
+                        <label htmlFor="profile-csv-input" className="profile-modal-label">
+                          Librărie Goodreads
+                        </label>
+                        <label htmlFor="profile-csv-input" className="profile-file-upload">
+                          <Upload size={16} strokeWidth={2} aria-hidden="true" />
+                          <span className="profile-file-upload-text">
+                            {csvFile ? csvFile.name : 'Încarcă fișierul CSV exportat...'}
+                          </span>
+                        </label>
+                        <input
+                          id="profile-csv-input"
+                          type="file"
+                          accept=".csv,text/csv"
+                          onChange={handleCsvFileChange}
+                          className="profile-file-input-hidden"
+                        />
+                      </div>
+
+                      {uploadError ? <p className="profile-modal-error">{uploadError}</p> : null}
+
+                      <button
+                        type="submit"
+                        className="profile-modal-submit"
+                        disabled={isUploadingCsv || !displayNameInput.trim() || !csvFile}
+                      >
+                        {isUploadingCsv
+                          ? 'Se încarcă...'
+                          : (cookieUserId ? 'Actualizează librăria' : 'Generează URL')}
+                      </button>
+                    </form>
+
+                    {generatedProfileUrl ? (
+                      <div className="profile-url-result">
+                        <label className="profile-modal-label">
+                          URL-ul tău pe 'Ce mai citim'
+                        </label>
+                        <div className="profile-url-field">
+                          <a
+                            href={generatedProfileUrl}
+                            className="profile-url-text"
+                            onClick={() => setShowProfileModal(false)}
+                            title="Mergi la librăria ta"
+                          >
+                            {generatedProfileUrl}
+                          </a>
+                          <button
+                            type="button"
+                            className={`profile-url-copy-icon-btn ${copiedUrl ? 'copied' : ''}`}
+                            onClick={handleCopyGeneratedUrl}
+                            aria-label="Copiază linkul"
+                            title={copiedUrl ? 'Copiat!' : 'Copiază linkul'}
+                          >
+                            {copiedUrl ? <Check size={16} /> : <Copy size={16} />}
+                          </button>
+                        </div>
+
+                        {qrCodeDataUrl ? (
+                          <div className="profile-qr-wrapper">
+                            <img src={qrCodeDataUrl} alt="QR code for generated website URL" className="profile-qr-image" />
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </div>
             </div>
-          </div>
-        ) : null}
+          ) : null
+        }
 
         {error ? <div className="status-banner">{error}</div> : null}
 
-        {isLoading ? (
-          <div className="book-controls book-controls-placeholder" aria-hidden="true" />
-        ) : books.length > 0 ? (
-          <div className="book-controls" aria-label="Book controls">
-            <div className="toolbar-group">
-              <GlideSelect
-                options={glideAuthorOptions}
-                value={activeAuthorFilter}
-                onChange={(val) => setActiveAuthorFilter(val)}
-                ariaLabel="Selectează autorul"
-                showTags
-                accentColor="#c4b5fd"
-                surfaceColor="rgba(15, 23, 42, 0.85)"
-                highlightColor="rgba(139, 92, 246, 0.35)"
-                textColor="#f8fafc"
-                size="md"
-                align={isMobile ? 'left' : 'right'}
-                placement='bottom'
-                radius={16}
-                menuWidth={240}
-                icon={<UserSearch size={13} strokeWidth={2} />}
-              />
-            </div>
-
-            <div className="toolbar-group">
-              <GlideSelect
-                options={glideSortOptions}
-                value={activeBookSort}
-                onChange={(val) => setActiveBookSort(val)}
-                ariaLabel="Sortează cărțile"
-                accentColor="#c4b5fd"
-                surfaceColor="rgba(15, 23, 42, 0.85)"
-                highlightColor="rgba(139, 92, 246, 0.35)"
-                textColor="#f8fafc"
-                size="md"
-                align={isMobile ? 'left' : 'right'}
-                radius={16}
-                menuWidth={160}
-                icon={<ArrowUpDown size={13} strokeWidth={2} />}
-              />
-            </div>
-          </div>
-        ) : null}
-
-        <section
-          className="carousel-panel"
-          aria-label="Book carousel"
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
-        >
-          {shouldShowCarouselNavigation ? (
-            <button
-              type="button"
-              className="nav-button"
-              onClick={() => scrollBooks(-1)}
-              aria-label="Scroll books left"
-            >
-              ←
-            </button>
-          ) : null}
-
-          {isLoading ? (
-            <div className="books-carousel loading-carousel" aria-live="polite" aria-label="Loading books">
-              {Array.from({ length: 5 }).map((_, index) => (
-                <div key={`loading-${index}`} className="book-card loading-card">
-                  <div className="loading-cover" />
-                  <div className="loading-text" />
-                  <div className="loading-text short" />
-                </div>
-              ))}
-            </div>
-          ) : username && visibleBooks.length === 0 ? (
-            <div className="books-carousel empty-carousel" aria-live="polite" aria-label="Empty shelf">
-              <div className="empty-shelf-state">
-                <h2>Nu exista nimic pe acest raft.</h2>
+        {isExploreMode || activeShelf === 'collections' ? (
+          <section className="collections-section" aria-label={isExploreMode ? 'Explorează colecții publice' : 'Colecții'}>
+            {isLoadingCollections ? (
+              <div className="books-carousel loading-carousel" aria-live="polite" aria-label="Loading collections">
+                {Array.from({ length: 4 }).map((_, index) => (
+                  <div key={`loading-col-${index}`} className="book-card loading-card">
+                    <div className="loading-cover" />
+                    <div className="loading-text" />
+                    <div className="loading-text short" />
+                  </div>
+                ))}
               </div>
+            ): (isExploreMode? exploreCollections: filteredUserCollections).length === 0 ? (
+            <div className="collections-empty-state">
+              <Library size={32} className="collections-empty-icon" />
+              <h2>
+                {isExploreMode
+                  ? 'Nu există încă nicio colecție publică.'
+                    : userCollections.length > 0 && activeCollectionFilter === 'private'
+                ? 'Nu există nicio colecție privată.'
+                      : userCollections.length > 0 && activeCollectionFilter === 'public'
+                ? 'Nu există nicio colecție publică.'
+                : isOwnProfile
+                ? 'Nu ai creat încă nicio colecție.'
+                          : 'Acest utilizator nu are încă nicio colecție.'}
+              </h2>
+              {!isExploreMode && isOwnProfile && !showNewCollectionInput ? (
+                <button
+                  type="button"
+                  className="collections-new-trigger-btn"
+                  onClick={() => setShowNewCollectionInput(true)}
+                >
+                  <Plus size={16} />
+                  <span>Creează prima ta colecție</span>
+                </button>
+              ) : null}
             </div>
-          ) : (
-            <div className="books-carousel" ref={carouselRef}>
-              {visibleBooks.map((book, index) => {
-                const isCoverPulled =
-                  index < pulledImagesCount ||
-                  (!book.imageUrl?.includes('openlibrary.org') &&
-                    !book.imageUrl?.includes('goodreads.com') &&
-                    !book.imageUrl?.includes('ssl-images-amazon.com'))
+            ) : (
+            <div className="collections-rows-list">
+                {
+                  (isExploreMode ? exploreCollections : filteredUserCollections).map((collection) => {
+                    const activeUser = cookieUserId || getUserIdFromCookie()
+                    const isCollectionOwner = Boolean(
+                      isUserLoggedIn && activeUser && String(collection.userId) === String(activeUser),
+                    )
+                    return (
+                      <CollectionRow
+                        key={collection.id}
+                        collection={collection}
+                        isOwner={isCollectionOwner}
+                        showCreator={isExploreMode}
+                        onSelectCreator={handleSelectExploreCreator}
+                        onAddBookClick={handleOpenAddBookForCollection}
+                        onDeleteCollection={handleDeleteCollection}
+                        onBookClick={handleOpenCollectionBook}
+                      />
+                    )
+                  })
+                }
+              </div>
+            )}
+          </section>
+        ) : (
+          <>
+            {isLoading ? (
+              <div className="book-controls book-controls-placeholder" aria-hidden="true" />
+            ) : shelfBooks.length > 0 ? (
+              <div className="book-controls" aria-label="Book controls">
+                <div className="toolbar-group">
+                  <GlideSelect
+                    options={glideAuthorOptions}
+                    value={activeAuthorFilter}
+                    onChange={(val) => setActiveAuthorFilter(val)}
+                    ariaLabel="Selectează autorul"
+                    showTags
+                    accentColor="#c4b5fd"
+                    surfaceColor="rgba(15, 23, 42, 0.85)"
+                    highlightColor="rgba(139, 92, 246, 0.35)"
+                    textColor="#f8fafc"
+                    size="md"
+                    align="left"
+                    placement='bottom'
+                    radius={16}
+                    menuWidth={240}
+                    icon={<UserSearch size={13} strokeWidth={2} />}
+                  />
+                </div>
 
-                const cleanIsbn13 = String(book.isbn13 || (book.isbn?.length === 13 ? book.isbn : '') || '').replace(/[^0-9X]/gi, '').trim()
-                const cleanIsbn10 = String(book.isbn10 || (book.isbn?.length === 10 ? book.isbn : '') || '').replace(/[^0-9X]/gi, '').trim()
-                const effectiveIsbn = cleanIsbn13 || cleanIsbn10 || String(book.isbn || '').replace(/[^0-9X]/gi, '').trim()
+                <div className="toolbar-group">
+                  <GlideSelect
+                    options={glideSortOptions}
+                    value={activeBookSort}
+                    onChange={(val) => setActiveBookSort(val)}
+                    ariaLabel="Sortează cărțile"
+                    accentColor="#c4b5fd"
+                    surfaceColor="rgba(15, 23, 42, 0.85)"
+                    highlightColor="rgba(139, 92, 246, 0.35)"
+                    textColor="#f8fafc"
+                    size="md"
+                    align="left"
+                    radius={10}
+                    menuWidth={160}
+                    icon={<ArrowUpDown size={13} strokeWidth={2} />}
+                  />
+                </div>
+              </div>
+            ) : null}
 
-                const safeCoverUrl =
-                  book.imageUrl && !book.imageUrl.includes('goodreads.com') && !book.imageUrl.includes('ssl-images-amazon.com')
-                    ? book.imageUrl
-                    : effectiveIsbn
-                      ? `https://covers.openlibrary.org/b/isbn/${effectiveIsbn}-L.jpg`
-                      : ''
-
-                return (
-                  <article key={book.id} className="book-card">
-                    <div
-                      className="book-cover-surface"
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => handleBookTap(book)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault()
-                          openBookDetails(book)
-                        }
-                      }}
-                      aria-label={`Deschide detaliile pentru ${book.title}`}
-                    >
-                      <BookCover
-                        width={180}
-                        height={260}
-                        thickness={book.thickness}
-                        rotate={20}
-                        rotateHover={30}
-                        perspective={900}
-                        pagesOffset={4}
-                        bgColor="#0f172a"
-                        shadowColor="transparent"
-                      >
-                        <div className="book-cover-art">
-                          {isCoverPulled && safeCoverUrl ? (
-                            <img src={safeCoverUrl} alt={`${book.title} cover`} loading="lazy" />
-                          ) : (
-                            <div className="book-cover-placeholder" aria-hidden="true" />
-                          )}
-                        </div>
-                      </BookCover>
-                    </div>
-
-                    <div className="book-meta">
-                      <h2
-                        onClick={() => handleBookTap(book)}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        {book.title}
-                      </h2>
-                      <p>{book.author}</p>
-                      {activeShelf === 'read' ? (
-                        <>
-                          <div className="book-rating" aria-label={`User rating: ${book.rating} out of 5`}>
-                            {renderStars(book.rating)}
-                          </div>
-                        </>
-                      ) : null}
-                      {book.averageRating ? (
-                        <div className="book-average-rating" aria-label={`Average Goodreads rating: ${book.averageRating}`}>
-                          <span style={{ marginRight: '4px' }} aria-hidden="true">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="bi bi-people-fill" viewBox="0 0 16 16">
-                              <path d="M7 14s-1 0-1-1 1-4 5-4 5 3 5 4-1 1-1 1zm4-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6m-5.784 6A2.24 2.24 0 0 1 5 13c0-1.355.68-2.75 1.936-3.72A6.3 6.3 0 0 0 5 9c-4 0-5 3-5 4s1 1 1 1zM4.5 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5" />
-                            </svg>
-                          </span>
-                          {book.averageRating.toFixed(2)}
-                        </div>
-                      ) : null}
-                    </div>
-                  </article>
-                )
-              })}
-            </div>
-          )}
-
-          {shouldShowCarouselNavigation ? (
-            <button
-              type="button"
-              className="nav-button"
-              onClick={() => scrollBooks(1)}
-              aria-label="Scroll books right"
+            <section
+              className="carousel-panel"
+              aria-label="Book carousel"
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerUp}
             >
-              →
-            </button>
-          ) : null}
+              {shouldShowCarouselNavigation ? (
+                <button
+                  type="button"
+                  className="nav-button"
+                  onClick={() => scrollBooks(-1)}
+                  aria-label="Scroll books left"
+                >
+                  ←
+                </button>
+              ) : null}
 
-        </section>
+              {isLoading ? (
+                <div className="books-carousel loading-carousel" aria-live="polite" aria-label="Loading books">
+                  {Array.from({ length: 5 }).map((_, index) => (
+                    <div key={`loading-${index}`} className="book-card loading-card">
+                      <div className="loading-cover" />
+                      <div className="loading-text" />
+                      <div className="loading-text short" />
+                    </div>
+                  ))}
+                </div>
+              ) : username && visibleBooks.length === 0 ? (
+                <div className="books-carousel empty-carousel" aria-live="polite" aria-label="Empty shelf">
+                  <div className="empty-shelf-state">
+                    <h2>Nu exista nimic pe acest raft.</h2>
+                  </div>
+                </div>
+              ) : (
+                <div className="books-carousel" ref={carouselRef}>
+                  {visibleBooks.map((book) => {
+                    const safeCoverUrl = book.imageUrl || ''
+
+                    return (
+                      <article key={book.id} className="book-card">
+                        <div
+                          className="book-cover-surface"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => handleBookTap(book)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              openBookDetails(book)
+                            }
+                          }}
+                          aria-label={`Deschide detaliile pentru ${book.title}`}
+                        >
+                          <BookCover
+                            width={180}
+                            height={260}
+                            thickness={book.thickness}
+                            rotate={20}
+                            rotateHover={30}
+                            perspective={900}
+                            pagesOffset={4}
+                            bgColor="#0f172a"
+                            shadowColor="transparent"
+                          >
+                            <div className="book-cover-art">
+                              {safeCoverUrl ? (
+                                <img src={safeCoverUrl} alt={`${book.title} cover`} loading="lazy" />
+                              ) : (
+                                <div className="book-cover-placeholder" aria-hidden="true" />
+                              )}
+                            </div>
+                          </BookCover>
+                        </div>
+
+                        <div className="book-meta">
+                          <h2
+                            onClick={() => handleBookTap(book)}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            {book.title}
+                          </h2>
+                          <p>{book.author}</p>
+                          {activeShelf === 'read' ? (
+                            <>
+                              <div className="book-rating" aria-label={`User rating: ${book.rating} out of 5`}>
+                                {renderStars(book.rating)}
+                              </div>
+                            </>
+                          ) : null}
+                          {book.averageRating ? (
+                            <div className="book-average-rating" aria-label={`Average Goodreads rating: ${book.averageRating}`}>
+                              <span style={{ marginRight: '4px' }} aria-hidden="true">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="bi bi-people-fill" viewBox="0 0 16 16">
+                                  <path d="M7 14s-1 0-1-1 1-4 5-4 5 3 5 4-1 1-1 1zm4-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6m-5.784 6A2.24 2.24 0 0 1 5 13c0-1.355.68-2.75 1.936-3.72A6.3 6.3 0 0 0 5 9c-4 0-5 3-5 4s1 1 1 1zM4.5 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5" />
+                                </svg>
+                              </span>
+                              {book.averageRating.toFixed(2)}
+                            </div>
+                          ) : null}
+                        </div>
+                      </article>
+                    )
+                  })}
+                </div>
+              )}
+
+              {shouldShowCarouselNavigation ? (
+                <button
+                  type="button"
+                  className="nav-button"
+                  onClick={() => scrollBooks(1)}
+                  aria-label="Scroll books right"
+                >
+                  →
+                </button>
+              ) : null}
+
+            </section>
+          </>
+        )}
 
         {!isCheckingAuth && (
           supabaseUser ? (
@@ -2333,20 +2898,159 @@ function App() {
             type="button"
             className="sticky-add-book-btn"
             onClick={() => {
+              if (!isExploreMode && activeShelf === 'collections') {
+                const activeUser = cookieUserId || getUserIdFromCookie()
+                if (activeUser && String(currentUserId) !== String(activeUser)) {
+                  setCurrentUserId(String(activeUser))
+                  window.history.pushState({}, '', `/${activeUser}/collections`)
+                  setBooksFetchTrigger((prev) => prev + 1)
+                }
+                setShowNewCollectionInput(true)
+                window.scrollTo({ top: 0, behavior: 'smooth' })
+                return
+              }
+              const defaultShelf = SHELF_OPTIONS.some((s) => s.id === activeShelf) ? activeShelf : 'to-read'
+              setTargetShelf(defaultShelf)
+              setTargetCollectionForSearch(null)
               setIsSearchModalOpen(true)
               setSearchError('')
             }}
-            aria-label="Caută și adaugă cărți"
-            title="Caută și adaugă cărți"
+            aria-label={
+              !isExploreMode && activeShelf === 'collections'
+                ? 'Creează o colecție nouă'
+                : `Adaugă o carte în ${getShelfLabel(activeShelf)}`
+            }
+            title={
+              !isExploreMode && activeShelf === 'collections'
+                ? 'Creează o colecție nouă'
+                : `Adaugă o carte în ${getShelfLabel(activeShelf)}`
+            }
           >
             <Plus size={24} strokeWidth={2.4} />
           </button>
         )}
 
+        {showNewCollectionInput && (
+          <div
+            className="search-modal-backdrop"
+            onClick={() => {
+              setShowNewCollectionInput(false)
+              setNewCollectionTitle('')
+              setNewCollectionDescription('')
+              setNewCollectionIsPrivate(false)
+            }}
+          >
+            <div
+              className="search-modal"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="create-collection-modal-title"
+            >
+              <div className="search-modal-header">
+                <h2 id="create-collection-modal-title" className="search-modal-title">
+                  Colecție nouă
+                </h2>
+                <button
+                  type="button"
+                  className="search-modal-close"
+                  onClick={() => {
+                    setShowNewCollectionInput(false)
+                    setNewCollectionTitle('')
+                    setNewCollectionDescription('')
+                    setNewCollectionIsPrivate(false)
+                  }}
+                  aria-label="Închide"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form className="collections-new-form" onSubmit={handleCreateCollection}>
+                <div className="collections-new-fields">
+                  <label className="collections-modal-label">
+                    <span>Titlu colecție</span>
+                    <input
+                      type="text"
+                      className="search-input collections-modal-input"
+                      placeholder="Ex: Top SF, Cărți de vacanță..."
+                      value={newCollectionTitle}
+                      onChange={(e) => setNewCollectionTitle(e.target.value)}
+                      autoFocus
+                      maxLength={80}
+                    />
+                  </label>
+
+                  <label className="collections-modal-label">
+                    <div className="collections-modal-label-row">
+                      <span>Descriere scurtă (opțional)</span>
+                      <span className="collections-new-desc-counter">
+                        {newCollectionDescription.length}/140
+                      </span>
+                    </div>
+                    <textarea
+                      className="search-input collections-modal-textarea"
+                      placeholder="O scurtă descriere a colecției (max 140 caractere)..."
+                      value={newCollectionDescription}
+                      onChange={(e) => setNewCollectionDescription(e.target.value.slice(0, 140))}
+                      maxLength={140}
+                      rows={3}
+                    />
+                  </label>
+                </div>
+
+                <div className="collections-new-footer">
+                  <label className="collections-new-private-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={newCollectionIsPrivate}
+                      onChange={(e) => setNewCollectionIsPrivate(e.target.checked)}
+                    />
+                    <Lock size={15} />
+                    <span>Colecție privată (vizibilă doar pentru tine)</span>
+                  </label>
+
+                  <div className="collections-new-actions">
+                    <button
+                      type="button"
+                      className="collections-new-cancel-btn"
+                      onClick={() => {
+                        setShowNewCollectionInput(false)
+                        setNewCollectionTitle('')
+                        setNewCollectionDescription('')
+                        setNewCollectionIsPrivate(false)
+                      }}
+                    >
+                      Anulează
+                    </button>
+                    <button
+                      type="submit"
+                      className="search-submit-btn"
+                      disabled={isCreatingCollection || !newCollectionTitle.trim()}
+                    >
+                      {isCreatingCollection ? (
+                        <>
+                          <Loader2 size={16} className="spin-icon" />
+                          <span>Se creează...</span>
+                        </>
+                      ) : (
+                        'Creează colecția'
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {isSearchModalOpen && !selectedBook && (
           <div
             className="search-modal-backdrop"
-            onClick={() => setIsSearchModalOpen(false)}
+            onClick={() => {
+              setIsSearchModalOpen(false)
+              setTargetCollectionForSearch(null)
+            }}
           >
             <div
               className="search-modal"
@@ -2357,12 +3061,17 @@ function App() {
             >
               <div className="search-modal-header">
                 <h2 id="search-modal-title" className="search-modal-title">
-                  Adaugă o carte
+                  {targetCollectionForSearch
+                    ? `Adaugă în „${targetCollectionForSearch.title}”`
+                    : `Adaugă în „${getShelfLabel(activeShelf)}”`}
                 </h2>
                 <button
                   type="button"
                   className="search-modal-close"
-                  onClick={() => setIsSearchModalOpen(false)}
+                  onClick={() => {
+                    setIsSearchModalOpen(false)
+                    setTargetCollectionForSearch(null)
+                  }}
                   aria-label="Închide căutarea"
                 >
                   <X size={18} />
@@ -2453,8 +3162,9 @@ function App() {
               ) : null}
             </div>
           </div>
-        )}
-      </main>
+        )
+        }
+      </main >
     </div >
   )
 }

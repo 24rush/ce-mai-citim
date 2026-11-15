@@ -1,10 +1,7 @@
 import { createDefaultDbQuery } from '../_lib/db.js'
 import { normalizeCsvBook } from '../../src/lib/goodreads.js'
 
-export const buildDefaultCoverUrl = (isbn) => {
-  const cleanIsbn = String(isbn || '').replace(/[^0-9X]/gi, '').trim()
-  return cleanIsbn ? `https://covers.openlibrary.org/b/isbn/${encodeURIComponent(cleanIsbn)}-L.jpg` : ''
-}
+export const buildDefaultCoverUrl = () => ''
 
 export const USER_BOOKS_SQL = `
   SELECT
@@ -25,7 +22,7 @@ export const USER_BOOKS_SQL = `
     us.bookshelves,
     us.my_review,
     us.spoiler,
-    COALESCE(c.url, CASE WHEN b.isbn IS NOT NULL AND b.isbn <> '' THEN 'https://covers.openlibrary.org/b/isbn/' || b.isbn || '-L.jpg' ELSE '' END) AS cover_url
+    COALESCE(c.url, '') AS cover_url
   FROM users u
   LEFT JOIN user_shelves us ON us.user_id = u.user_id
   LEFT JOIN books b ON b.book_id = us.book_id
@@ -53,7 +50,7 @@ export const mapRowToBook = (row, index) =>
       Bookshelves: row.bookshelves ?? '',
       'My Review': row.my_review,
       Spoiler: row.spoiler,
-      imageUrl: row.cover_url || buildDefaultCoverUrl(row.isbn),
+      imageUrl: row.cover_url || '',
     },
     index,
   )

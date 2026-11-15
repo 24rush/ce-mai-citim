@@ -32,6 +32,14 @@ import isbnHandler, {
 import profileHandler from '../../api/profile.js'
 import shelvesHandler, { saveBookToShelf, removeBookFromShelf, getBookShelfStatus, getUserShelves } from '../../api/shelves.js'
 import searchHandler, { searchGoogleBooksVolumes } from '../../api/search.js'
+import collectionsHandler, {
+  createCollection,
+  addBookToCollection,
+  removeBookFromCollection,
+  deleteCollection,
+  getUserCollections,
+  getExploreCollections,
+} from '../../api/collections.js'
 
 const createMockRes = () => {
   const res = {
@@ -120,7 +128,7 @@ test('get books endpoint joins covers and returns all shelves', async () => {
   assert.equal(res.payload.books[0].bookshelves, 'read')
   assert.equal(res.payload.books[0].hasBookshelvesField, undefined)
   assert.equal(res.payload.books[0].bookshelf, undefined)
-  assert.equal(res.payload.books[1].imageUrl, 'https://covers.openlibrary.org/b/isbn/0345391802-L.jpg')
+  assert.equal(res.payload.books[1].imageUrl, '')
   assert.equal(res.payload.books[2].bookId, '777')
   assert.equal(res.payload.books[2].bookshelves, 'to-read')
   assert.equal(res.payload.books[2].imageUrl, '')
@@ -270,7 +278,7 @@ test('normalizes a CSV-keyed book object directly', () => {
   assert.equal(book.bookshelves, 'currently-reading')
   assert.equal(book.hasBookshelvesField, undefined)
   assert.equal(book.bookshelf, undefined)
-  assert.equal(book.imageUrl, 'https://covers.openlibrary.org/b/isbn/0345391802-L.jpg')
+  assert.equal(book.imageUrl, '')
   assert.equal(matchesShelf(book, 'currently-reading'), true)
 })
 
@@ -2323,6 +2331,157 @@ test('search endpoint validates query and handles GET requests', async () => {
   assert.equal(resValid.payload.books[0].author, 'Dan Simmons')
   assert.equal(resValid.payload.books[0].publishedYear, 1989)
 })
+
+test('getRouteStateFromPath supports collections route', () => {
+  assert.deepEqual(getRouteStateFromPath('/v48k1p9x/collections'), {
+    userId: 'v48k1p9x',
+    shelf: 'collections',
+    bookId: '',
+  })
+})
+
+test('collections endpoint creates collections, adds books, lists user & explore collections, and removes books', async () => {
+  const capturedQueries = []
+  const mockQuery = async (sqlText, values) => {
+    capturedQueries.push({ sqlText, values })
+    if (sqlText.includes('INSERT INTO collections')) {
+      return [
+        {
+          collection_id: 101,
+          user_id: values[0],
+          title: values[1],
+          description: values[2],
+          is_private: values[3],
+          created_at: '2026-11-14T20:00:00Z',
+        },
+      ]
+    }
+    if (sqlText.includes('SELECT collection_id, user_id, title')) {
+      return [{ collection_id: 101, user_id: 'abcd1234', title: 'Top SF' }]
+    }
+    if (sqlText.includes('DELETE FROM collection_books')) {
+      return [{ collection_id: 101, book_id: 'gb_dune' }]
+    }
+    if (sqlText.includes('FROM collections c')) {
+      return [
+        {
+          collection_id: 101,
+          user_id: 'abcd1234',
+          collection_title: 'Top SF',
+          collection_created_at: '2026-11-14T20:00:00Z',
+          display_name: 'Alin',
+          book_id: 'gb_dune',
+          book_added_at: '2026-11-14T20:01:00Z',
+          title: 'Dune',
+          author: 'Frank Herbert',
+          isbn: '9780441172719',
+          number_of_pages: 688,
+          original_publication_year: 1965,
+          description: 'Arrakis sci-fi classic',
+          main_category: 'Fiction',
+          cover_url: 'https://books.google.com/dune.jpg',
+        },
+      ]
+    }
+    return []
+  }
+
+  // 1. Create collection (default public + 140 char description)
+  const createRes = createMockRes()
+  await collectionsHandler(
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        action: 'create',
+        userId: 'abcd1234',
+        title: 'Top SF',
+        description: 'My favorite sci-fi novels',
+      },
+      dbQuery: mockQuery,
+    },
+    createRes,
+  )
+  assert.equal(createRes.statusCode, 200)
+  assert.equal(createRes.payload.collection.id, '101')
+  assert.equal(createRes.payload.collection.title, 'Top SF')
+  assert.equal(createRes.payload.collection.description, 'My favorite sci-fi novels')
+  assert.equal(createRes.payload.collection.isPrivate, false)
+
+  // 2. Add book to collection
+  const addBookRes = createMockRes()
+  await collectionsHandler(
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        action: 'add-book',
+        userId: 'abcd1234',
+        collectionId: 101,
+        bookId: 'gb_dune',
+        book: {
+          title: 'Dune',
+          author: 'Frank Herbert',
+          isbn: '9780441172719',
+          pages: 688,
+          publishedYear: 1965,
+          description: 'Arrakis sci-fi classic',
+          mainCategory: 'Fiction',
+          coverUrl: 'https://books.google.com/dune.jpg',
+        },
+      },
+      dbQuery: mockQuery,
+    },
+    addBookRes,
+  )
+  assert.equal(addBookRes.statusCode, 200)
+  assert.equal(addBookRes.payload.bookId, 'gb_dune')
+
+  // 3. Get user collections
+  const getUserRes = createMockRes()
+  await collectionsHandler(
+    {
+      method: 'GET',
+      query: { userId: 'abcd1234' },
+      dbQuery: mockQuery,
+    },
+    getUserRes,
+  )
+  assert.equal(getUserRes.statusCode, 200)
+  assert.equal(getUserRes.payload.collections.length, 1)
+  assert.equal(getUserRes.payload.collections[0].title, 'Top SF')
+  assert.equal(getUserRes.payload.collections[0].books.length, 1)
+  assert.equal(getUserRes.payload.collections[0].books[0].title, 'Dune')
+
+  // 4. Get explore collections
+  const getExploreRes = createMockRes()
+  await collectionsHandler(
+    {
+      method: 'GET',
+      query: { explore: 'true' },
+      dbQuery: mockQuery,
+    },
+    getExploreRes,
+  )
+  assert.equal(getExploreRes.statusCode, 200)
+  assert.equal(getExploreRes.payload.collections.length, 1)
+  assert.equal(getExploreRes.payload.collections[0].username, 'Alin')
+
+  // 5. Remove book from collection
+  const removeBookRes = createMockRes()
+  await collectionsHandler(
+    {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: { userId: 'abcd1234', collectionId: 101, bookId: 'gb_dune' },
+      dbQuery: mockQuery,
+    },
+    removeBookRes,
+  )
+  assert.equal(removeBookRes.statusCode, 200)
+  assert.equal(removeBookRes.payload.removed, true)
+})
+
 
 
 
