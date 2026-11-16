@@ -19,6 +19,10 @@
   display: inline-block;
 }
 
+.glide-select[data-open] {
+  z-index: 50;
+}
+
 .glide-select[data-disabled] {
   opacity: 0.5;
 }

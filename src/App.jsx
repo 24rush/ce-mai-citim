@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
-import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FolderPlus, Library, Loader2, Lock, LogOut, Plus, Save, Search, Share2, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
+import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FolderPlus, Library, Loader2, Lock, LogOut, Plus, Save, Search, Share2, Star, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
+import PeekRating from './components/PeekRating'
 import {
   buildBookShareUrl,
   buildGoodreadsApiUrl,
@@ -184,7 +185,12 @@ function BookCoverCard({
       className="book-cover-surface"
       role="button"
       tabIndex={0}
-      onClick={onClick}
+      onClick={(event) => {
+        if (event?.defaultPrevented || event?.target?.closest('.glide-select, .book-controls')) {
+          return
+        }
+        onClick?.(event)
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
@@ -512,6 +518,8 @@ function App() {
   const [shelfDropdownOpen, setShelfDropdownOpen] = useState(false)
   const [isSavingShelf, setIsSavingShelf] = useState(false)
   const [savedShelf, setSavedShelf] = useState(false)
+  const [showRatingPopup, setShowRatingPopup] = useState(false)
+  const [isSavingRating, setIsSavingRating] = useState(false)
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
@@ -966,16 +974,20 @@ function App() {
     }
   }, [currentUserId, booksFetchTrigger])
 
+  const prevSortShelfRef = useRef(activeShelf)
+
   useEffect(() => {
-    const defaultSortForShelf = activeShelf === 'read' ? 'recently-read' : (availableBookSortOptions[0]?.id || 'newest')
+    const isShelfChanged = prevSortShelfRef.current !== activeShelf
+    prevSortShelfRef.current = activeShelf
 
-    if (activeShelf === 'read' && activeBookSort !== 'recently-read') {
-      setActiveBookSort('recently-read')
-      return
-    }
+    const isCurrentSortAvailable = availableBookSortOptions.some((option) => option.id === activeBookSort)
 
-    if (activeShelf !== 'read' && (!availableBookSortOptions.some((option) => option.id === activeBookSort) || activeBookSort === 'recently-read')) {
-      setActiveBookSort(defaultSortForShelf)
+    if (isShelfChanged) {
+      const defaultSort = activeShelf === 'read' ? 'recently-read' : (availableBookSortOptions[0]?.id || 'newest')
+      setActiveBookSort(defaultSort)
+    } else if (!isCurrentSortAvailable) {
+      const fallbackSort = activeShelf === 'read' ? 'recently-read' : (availableBookSortOptions[0]?.id || 'newest')
+      setActiveBookSort(fallbackSort)
     }
   }, [activeBookSort, activeShelf, availableBookSortOptions])
 
@@ -1065,20 +1077,39 @@ function App() {
     return null
   }, [selectedBook, userShelvesByBookId])
 
+  const currentBookRating = useMemo(() => {
+    if (!selectedBook) return 0
+    if (loggedInUserBook && loggedInUserBook.myRating !== undefined) {
+      return Number(loggedInUserBook.myRating) || 0
+    }
+    if (isOwnProfile && selectedBook.rating !== undefined) {
+      return Number(selectedBook.rating) || 0
+    }
+    return 0
+  }, [selectedBook, loggedInUserBook, isOwnProfile])
+
   useEffect(() => {
     if (!selectedBook) {
       setSavedShelf(false)
       setShelfDropdownOpen(false)
+      setShowRatingPopup(false)
       return
     }
 
     if (loggedInUserBook?.shelf) {
       setTargetShelf(loggedInUserBook.shelf)
       setSavedShelf(true)
+      if (loggedInUserBook.shelf === 'read') {
+        const rating = Number(loggedInUserBook.myRating) || 0
+        setShowRatingPopup(rating === 0)
+      } else {
+        setShowRatingPopup(false)
+      }
     } else {
       const defaultShelf = SHELF_OPTIONS.some((s) => s.id === activeShelf) ? activeShelf : 'to-read'
       setTargetShelf(defaultShelf)
       setSavedShelf(false)
+      setShowRatingPopup(false)
     }
   }, [selectedBook, loggedInUserBook, activeShelf])
 
@@ -1251,6 +1282,9 @@ function App() {
   }
 
   const closeBookDetails = () => {
+    setShowRatingPopup(false)
+    setIsSavingRating(false)
+
     if (openedFromSearch) {
       setSelectedBook(null)
       setOpenedFromSearch(false)
@@ -1570,6 +1604,11 @@ function App() {
       const savedShelfName = data.shelf || shelfToSave
       setTargetShelf(savedShelfName)
       setSavedShelf(true)
+      if (savedShelfName === 'read') {
+        setShowRatingPopup(true)
+      } else {
+        setShowRatingPopup(false)
+      }
       setUserShelvesByBookId((prev) => ({
         ...prev,
         [bookId]: {
@@ -1588,6 +1627,118 @@ function App() {
       console.error('Error saving book to shelf:', err)
     } finally {
       setIsSavingShelf(false)
+    }
+  }
+
+  const handleRateBook = async (newRating) => {
+    if (!selectedBook) return
+    const activeUser = cookieUserId || getUserIdFromCookie()
+    if (!isUserLoggedIn || !activeUser) {
+      closeBookDetails()
+      setShowProfileModal(true)
+      return
+    }
+
+    const bookId = String(selectedBook.bookId || selectedBook.id || loggedInUserBook?.bookId || '')
+    if (!bookId) return
+
+    const previousRating = currentBookRating
+
+    // Optimistic update: update star rating immediately before receiving server confirmation
+    setUserShelvesByBookId((prev) => ({
+      ...prev,
+      [bookId]: {
+        ...(prev[bookId] || {}),
+        bookId,
+        shelf: 'read',
+        myRating: newRating,
+        title: selectedBook.title,
+        author: selectedBook.author,
+        isbn: selectedBook.isbn,
+      },
+    }))
+
+    setSelectedBook((prev) => (prev ? { ...prev, rating: newRating } : prev))
+    setBooks((prev) =>
+      prev.map((b) =>
+        String(b.bookId || b.id) === bookId ? { ...b, rating: newRating } : b
+      )
+    )
+
+    try {
+      setIsSavingRating(true)
+      const response = await fetch('/api/shelves', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: activeUser,
+          bookId,
+          action: 'rate',
+          rating: newRating,
+          shelf: 'read',
+          book: {
+            bookId,
+            title: selectedBook.title,
+            author: selectedBook.author,
+            isbn: selectedBook.isbn,
+            pages: selectedBook.pages,
+            publishedYear: selectedBook.publishedYear,
+            publisher: selectedBook.publisher,
+            binding: selectedBook.binding,
+            description: selectedBook.description,
+            mainCategory: selectedBook.mainCategory,
+            coverUrl: selectedBook.imageUrl || selectedBook.coverUrl,
+          },
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to save rating: status ${response.status}`)
+      }
+
+      const data = await response.json()
+      const savedRating = Number(data.myRating ?? newRating)
+
+      // Sync confirmed rating from server if it differs
+      if (savedRating !== newRating) {
+        setUserShelvesByBookId((prev) => ({
+          ...prev,
+          [bookId]: {
+            ...(prev[bookId] || {}),
+            bookId,
+            shelf: 'read',
+            myRating: savedRating,
+            title: selectedBook.title,
+            author: selectedBook.author,
+            isbn: selectedBook.isbn,
+          },
+        }))
+        setSelectedBook((prev) => (prev ? { ...prev, rating: savedRating } : prev))
+        setBooks((prev) =>
+          prev.map((b) =>
+            String(b.bookId || b.id) === bookId ? { ...b, rating: savedRating } : b
+          )
+        )
+      }
+    } catch (err) {
+      console.error('Error saving book rating:', err)
+      // Rollback on failure
+      setUserShelvesByBookId((prev) => ({
+        ...prev,
+        [bookId]: {
+          ...(prev[bookId] || {}),
+          bookId,
+          myRating: previousRating,
+        },
+      }))
+      setSelectedBook((prev) => (prev ? { ...prev, rating: previousRating } : prev))
+      setBooks((prev) =>
+        prev.map((b) =>
+          String(b.bookId || b.id) === bookId ? { ...b, rating: previousRating } : b
+        )
+      )
+    } finally {
+      setIsSavingRating(false)
     }
   }
 
@@ -1619,6 +1770,7 @@ function App() {
       }
 
       setSavedShelf(false)
+      setShowRatingPopup(false)
       setUserShelvesByBookId((prev) => {
         const next = { ...prev }
         delete next[bookId]
@@ -1760,7 +1912,7 @@ function App() {
   const handleModalPointerDown = (event) => {
     if (modalSwipeExit) return
     if (event.button !== 0 && event.pointerType === 'mouse') return
-    if (event.target.closest('button, select, input, a, .book-shelf-options-menu, .book-detail-qr-box')) return
+    if (event.target.closest('button, select, input, a, .book-shelf-options-menu, .book-detail-qr-box, .book-detail-rating-section, .book-rating-popup')) return
 
     modalPointerRef.current = {
       startX: event.clientX,
@@ -2148,6 +2300,7 @@ function App() {
 
     event.preventDefault()
     carouselRef.current.scrollLeft = dragState.current.scrollLeft - deltaX
+    syncBookCoverFocus()
   }
 
   const handlePointerUp = (event) => {
@@ -2171,8 +2324,11 @@ function App() {
     }
   }
 
-  const handleBookTap = (book) => {
+  const handleBookTap = (book, event) => {
     if (dragState.current.active || pointerDragRef.current.hasMoved) {
+      return
+    }
+    if (event?.defaultPrevented || event?.target?.closest('.glide-select, .book-controls')) {
       return
     }
     openBookDetails(book)
@@ -2488,15 +2644,6 @@ function App() {
               <div className="book-detail-header">
                 <button
                   type="button"
-                  className="book-detail-back-button"
-                  onClick={closeBookDetails}
-                  aria-label="Înapoi"
-                  title="Înapoi"
-                >
-                  <ArrowLeft size={18} />
-                </button>
-                <button
-                  type="button"
                   className="modal-close-btn"
                   onClick={closeBookDetails}
                   aria-label="Închide detaliile cărții"
@@ -2597,6 +2744,70 @@ function App() {
                                   {targetShelf === shelf.id && savedShelf && <Check size={14} />}
                                 </button>
                               ))}
+                            </div>
+                          )}
+                          {savedShelf && targetShelf === 'read' && (
+                            <div className="book-detail-rating-section">
+                              {showRatingPopup ? (
+                                <div
+                                  className="book-rating-popup-wrapper"
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <div className="book-rating-popup">
+                                    <div className="book-rating-popup-header">
+                                      <span className="book-rating-popup-title">Câte steluțe îi dai?</span>
+                                      <button
+                                        type="button"
+                                        className="book-rating-popup-close-btn"
+                                        onClick={() => setShowRatingPopup(false)}
+                                        aria-label="Închide"
+                                        title="Închide"
+                                      >
+                                        <X size={14} />
+                                      </button>
+                                    </div>
+
+                                    <div className="book-rating-stars-row">
+                                      <PeekRating
+                                        value={currentBookRating}
+                                        defaultValue={currentBookRating || 0}
+                                        count={5}
+                                        shape="star"
+                                        labels={['1 - Slabă', '2 - Acceptabilă', '3 - Bună', '4 - Foarte bună', '5 - Excelentă']}
+                                        activeColor="#f5b400"
+                                        idleColor="#52525b"
+                                        tipColor="#1e293b"
+                                        tipTextColor="#f8fafc"
+                                        size={20}
+                                        gap={2}
+                                        lift={4}
+                                        magnify={1.12}
+                                        riseDuration={200}
+                                        popScale={1.35}
+                                        showTip={false}
+                                        allowClear
+                                        onChange={handleRateBook}
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className="book-rate-trigger-btn"
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onClick={() => setShowRatingPopup(true)}
+                                  title="Evaluează cartea"
+                                >
+                                  <Star size={14} className={currentBookRating > 0 ? 'star-lit' : ''} />
+                                  <span>
+                                    {currentBookRating > 0
+                                      ? `Evaluarea ta: ${currentBookRating}/5`
+                                      : 'Câte steluțe îi dai?'}
+                                  </span>
+                                </button>
+                              )}
                             </div>
                           )}
                         </>
@@ -2797,7 +3008,10 @@ function App() {
                                 <span>Se încarcă...</span>
                               </span>
                             ) : (
-                              'Încarcă'
+                              <>
+                                <Upload size={15} />
+                                <span>Încarcă</span>
+                              </>
                             )}
                           </button>
                         </div>
@@ -2925,7 +3139,12 @@ function App() {
             {isLoading ? (
               <div className="book-controls book-controls-placeholder" aria-hidden="true" />
             ) : shelfBooks.length > 0 ? (
-              <div className="book-controls" aria-label="Book controls">
+              <div
+                className="book-controls"
+                aria-label="Book controls"
+                onClick={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+              >
                 <div className="toolbar-group">
                   <GlideSelect
                     options={glideAuthorOptions}
@@ -3011,12 +3230,12 @@ function App() {
                         <BookCoverCard
                           book={book}
                           isPriority={index < 6}
-                          onClick={() => handleBookTap(book)}
+                          onClick={(event) => handleBookTap(book, event)}
                         />
 
                         <div className="book-meta">
                           <h2
-                            onClick={() => handleBookTap(book)}
+                            onClick={(event) => handleBookTap(book, event)}
                             style={{ cursor: 'pointer' }}
                           >
                             {book.title}

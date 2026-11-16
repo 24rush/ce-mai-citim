@@ -30,7 +30,7 @@ import isbnHandler, {
   searchGoogleBooks,
 } from '../../api/isbn.js'
 import profileHandler from '../../api/profile.js'
-import shelvesHandler, { saveBookToShelf, removeBookFromShelf, getBookShelfStatus, getUserShelves } from '../../api/shelves.js'
+import shelvesHandler, { saveBookToShelf, removeBookFromShelf, getBookShelfStatus, getUserShelves, rateBook } from '../../api/shelves.js'
 import searchHandler, { searchGoogleBooksVolumes } from '../../api/search.js'
 import collectionsHandler, {
   createCollection,
@@ -1286,6 +1286,9 @@ test('shelves handler handles GET, POST, DELETE, and rejects unsupported methods
     if (sql.includes('INSERT INTO user_shelves')) {
       return [{ user_id: values[0], book_id: values[1], bookshelves: values[2] }]
     }
+    if (sql.includes('UPDATE user_shelves')) {
+      return [{ bookshelves: 'read', my_rating: values[2] }]
+    }
     if (sql.includes('DELETE FROM user_shelves')) {
       return [{ user_id: values[0], book_id: values[1] }]
     }
@@ -1356,6 +1359,53 @@ test('shelves handler handles GET, POST, DELETE, and rejects unsupported methods
   const putRes = createMockRes()
   await shelvesHandler({ method: 'PUT' }, putRes)
   assert.equal(putRes.statusCode, 405)
+
+  // POST with action rate
+  const postRateReq = {
+    method: 'POST',
+    body: {
+      userId: 'user1234',
+      bookId: 'b1',
+      action: 'rate',
+      rating: 4,
+    },
+    dbQuery: mockDbQuery,
+  }
+  const postRateRes = createMockRes()
+  await shelvesHandler(postRateReq, postRateRes)
+  assert.equal(postRateRes.statusCode, 200)
+  assert.equal(postRateRes.payload.success, true)
+  assert.equal(postRateRes.payload.myRating, 4)
+})
+
+test('rateBook updates rating in user_shelves or inserts read shelf entry', async () => {
+  const executed = []
+  const mockDbQuery = async (sql, values) => {
+    executed.push({ sql, values })
+    if (sql.includes('SELECT bookshelves')) {
+      return [{ bookshelves: 'read' }]
+    }
+    if (sql.includes('UPDATE user_shelves')) {
+      return [{ bookshelves: 'read', my_rating: values[2] }]
+    }
+    return []
+  }
+
+  const result = await rateBook({
+    userId: 'user1234',
+    bookId: 'book456',
+    rating: 5,
+    queryFn: mockDbQuery,
+  })
+
+  assert.equal(result.success, true)
+  assert.equal(result.userId, 'user1234')
+  assert.equal(result.bookId, 'book456')
+  assert.equal(result.shelf, 'read')
+  assert.equal(result.myRating, 5)
+  assert.equal(executed.length, 2)
+  assert.match(executed[1].sql, /UPDATE user_shelves/)
+  assert.deepEqual(executed[1].values, ['user1234', 'book456', 5])
 })
 
 test('getUserShelves returns all user books alongside their reviews at page load', async () => {

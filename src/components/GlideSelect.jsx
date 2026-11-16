@@ -156,8 +156,15 @@ export default function GlideSelect({
       onChange?.(it.value, it);
       if (!viaKey && rootRef.current) rootRef.current.dataset.swap = '';
     }
-    close('instant');
-    triggerRef.current?.focus({ preventScroll: true });
+    if (viaKey) {
+      close('instant');
+      triggerRef.current?.focus({ preventScroll: true });
+    } else {
+      setTimeout(() => {
+        close('instant');
+        triggerRef.current?.focus({ preventScroll: true });
+      }, 50);
+    }
   };
 
   const onTriggerKey = e => {
@@ -189,11 +196,28 @@ export default function GlideSelect({
 
   useEffect(() => {
     if (phase === 'closed') return undefined;
+    let closedByClick = false;
     const onDown = e => {
-      if (rootRef.current && !rootRef.current.contains(e.target)) close('pop');
+      if (rootRef.current && !rootRef.current.contains(e.target)) {
+        closedByClick = true;
+        e.preventDefault();
+        e.stopPropagation();
+        close('pop');
+      }
+    };
+    const onClickCapture = e => {
+      if (closedByClick) {
+        closedByClick = false;
+        e.preventDefault();
+        e.stopPropagation();
+      }
     };
     document.addEventListener('pointerdown', onDown, true);
-    return () => document.removeEventListener('pointerdown', onDown, true);
+    document.addEventListener('click', onClickCapture, true);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('click', onClickCapture, true);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
   useEffect(() => {
@@ -209,6 +233,7 @@ export default function GlideSelect({
     return i >= 0 && i < items.length ? i : null;
   };
   const onListDown = e => {
+    e.stopPropagation();
     if (scrub.current) return;
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -218,11 +243,13 @@ export default function GlideSelect({
     setActive(rowAt(e.clientY));
   };
   const onListMove = e => {
+    e.stopPropagation();
     if (!scrub.current || scrub.current.id !== e.pointerId) return;
     const i = rowAt(e.clientY);
     if (i !== active) setActive(i);
   };
   const onListUp = e => {
+    e.stopPropagation();
     if (!scrub.current || scrub.current.id !== e.pointerId) return;
     const i = e.type === 'pointerup' ? rowAt(e.clientY) : null;
     scrub.current = null;
@@ -244,6 +271,10 @@ export default function GlideSelect({
       className={`glide-select${className ? ` ${className}` : ''}`}
       data-size={size}
       data-disabled={disabled ? '' : undefined}
+      data-open={phase !== 'closed' ? '' : undefined}
+      onClick={e => e.stopPropagation()}
+      onPointerDown={e => e.stopPropagation()}
+      onPointerUp={e => e.stopPropagation()}
       style={{
         '--gs-accent': accentColor,
         '--gs-surface': surfaceColor,
@@ -276,10 +307,14 @@ export default function GlideSelect({
         disabled={disabled}
         className="glide-select__trigger"
         onPointerDown={e => {
+          e.stopPropagation();
           if (e.button !== 0 || disabled) return;
           e.currentTarget.focus({ preventScroll: true });
           if (phase === 'open') close('pop');
           else open(false);
+        }}
+        onClick={e => {
+          e.stopPropagation();
         }}
         onKeyDown={onTriggerKey}
       >
@@ -294,7 +329,16 @@ export default function GlideSelect({
         </span>
       </button>
       {phase !== 'closed' ? (
-        <div ref={menuRef} className="glide-select__menu" data-state="open" data-side={side} data-align={effectiveAlign}>
+        <div
+          ref={menuRef}
+          className="glide-select__menu"
+          data-state="open"
+          data-side={side}
+          data-align={effectiveAlign}
+          onClick={e => e.stopPropagation()}
+          onPointerDown={e => e.stopPropagation()}
+          onPointerUp={e => e.stopPropagation()}
+        >
           <div
             id={`${id}-list`}
             role="listbox"
@@ -320,6 +364,11 @@ export default function GlideSelect({
                 aria-selected={i === selected}
                 data-index={i}
                 className="glide-select__option"
+                onClick={e => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  pick(i, false);
+                }}
               >
                 <span className="glide-select__name">{it.label}</span>
                 {showTags && it.tag ? <span className="glide-select__tag">{it.tag}</span> : null}

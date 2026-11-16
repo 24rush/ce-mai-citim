@@ -6,6 +6,7 @@ export const saveBookToShelf = async ({
   bookId,
   shelf,
   book = {},
+  rating,
   queryFn,
 }) => {
   const cleanUserId = String(userId || '').trim()
@@ -82,24 +83,110 @@ export const saveBookToShelf = async ({
   }
 
   // 2. Upsert user shelf connection
-  const shelfSql = `
-    INSERT INTO user_shelves (
-      user_id, book_id, bookshelves, date_added, updated_at
-    )
-    VALUES ($1, $2, $3, NOW(), NOW())
-    ON CONFLICT (user_id, book_id)
-    DO UPDATE SET
-      bookshelves = EXCLUDED.bookshelves,
-      updated_at = NOW()
-    RETURNING user_id, book_id, bookshelves;
-  `.trim()
+  let shelfSql
+  let shelfParams
 
-  const rows = await executeQuery(shelfSql, [cleanUserId, cleanBookId, cleanShelf])
+  if (rating !== undefined && rating !== null) {
+    const cleanRating = Math.min(5, Math.max(0, parseInt(rating, 10) || 0))
+    shelfSql = `
+      INSERT INTO user_shelves (
+        user_id, book_id, bookshelves, my_rating, date_added, updated_at
+      )
+      VALUES ($1, $2, $3, $4, NOW(), NOW())
+      ON CONFLICT (user_id, book_id)
+      DO UPDATE SET
+        bookshelves = EXCLUDED.bookshelves,
+        my_rating = EXCLUDED.my_rating,
+        updated_at = NOW()
+      RETURNING user_id, book_id, bookshelves, my_rating;
+    `.trim()
+    shelfParams = [cleanUserId, cleanBookId, cleanShelf, cleanRating]
+  } else {
+    shelfSql = `
+      INSERT INTO user_shelves (
+        user_id, book_id, bookshelves, date_added, updated_at
+      )
+      VALUES ($1, $2, $3, NOW(), NOW())
+      ON CONFLICT (user_id, book_id)
+      DO UPDATE SET
+        bookshelves = EXCLUDED.bookshelves,
+        updated_at = NOW()
+      RETURNING user_id, book_id, bookshelves, my_rating;
+    `.trim()
+    shelfParams = [cleanUserId, cleanBookId, cleanShelf]
+  }
+
+  const rows = await executeQuery(shelfSql, shelfParams)
   return {
     success: true,
     userId: cleanUserId,
     bookId: cleanBookId,
     shelf: rows?.[0]?.bookshelves || cleanShelf,
+    myRating: Number(rows?.[0]?.my_rating) || (rating !== undefined && rating !== null ? Number(rating) : 0),
+  }
+}
+
+export const rateBook = async ({ userId, bookId, rating, queryFn }) => {
+  const cleanUserId = String(userId || '').trim()
+  if (!cleanUserId || !/^[a-zA-Z0-9]{8}$/.test(cleanUserId)) {
+    throw new Error('A valid 8-character user id is required.')
+  }
+
+  const cleanBookId = String(bookId || '').trim()
+  if (!cleanBookId) {
+    throw new Error('Book id is required.')
+  }
+
+  const cleanRating = Math.min(5, Math.max(0, parseInt(rating, 10) || 0))
+  const executeQuery = queryFn || (await createDefaultDbQuery())
+
+  // Check if book exists in user_shelves
+  const checkSql = `
+    SELECT bookshelves FROM user_shelves
+    WHERE user_id = $1 AND book_id = $2
+    LIMIT 1;
+  `.trim()
+
+  const existing = await executeQuery(checkSql, [cleanUserId, cleanBookId])
+
+  if (existing && existing.length > 0) {
+    const updateSql = `
+      UPDATE user_shelves
+      SET my_rating = $3, updated_at = NOW()
+      WHERE user_id = $1 AND book_id = $2
+      RETURNING user_id, book_id, bookshelves, my_rating;
+    `.trim()
+
+    const rows = await executeQuery(updateSql, [cleanUserId, cleanBookId, cleanRating])
+    return {
+      success: true,
+      userId: cleanUserId,
+      bookId: cleanBookId,
+      shelf: rows?.[0]?.bookshelves || existing[0]?.bookshelves || 'read',
+      myRating: Number(rows?.[0]?.my_rating) || cleanRating,
+    }
+  }
+
+  // If not yet saved on user_shelves, insert on 'read' shelf as default
+  const insertSql = `
+    INSERT INTO user_shelves (
+      user_id, book_id, bookshelves, my_rating, date_added, updated_at
+    )
+    VALUES ($1, $2, 'read', $3, NOW(), NOW())
+    ON CONFLICT (user_id, book_id)
+    DO UPDATE SET
+      my_rating = EXCLUDED.my_rating,
+      updated_at = NOW()
+    RETURNING user_id, book_id, bookshelves, my_rating;
+  `.trim()
+
+  const rows = await executeQuery(insertSql, [cleanUserId, cleanBookId, cleanRating])
+  return {
+    success: true,
+    userId: cleanUserId,
+    bookId: cleanBookId,
+    shelf: rows?.[0]?.bookshelves || 'read',
+    myRating: Number(rows?.[0]?.my_rating) || cleanRating,
   }
 }
 
@@ -245,8 +332,9 @@ export default async function handler(req, res) {
 
     const userId = body.userId
     const bookId = body.bookId
-    const shelf = body.shelf || 'to-read'
+    const shelf = body.shelf
     const book = body.book || {}
+    const rating = body.rating
 
     // Support undo / remove via POST as well
     if (body.action === 'remove' || body.action === 'delete') {
@@ -270,13 +358,36 @@ export default async function handler(req, res) {
       }
     }
 
+    if (body.action === 'rate' || (rating !== undefined && !shelf)) {
+      try {
+        const executeQuery = req.dbQuery || (await createDefaultDbQuery())
+        const result = await rateBook({
+          userId,
+          bookId,
+          rating,
+          queryFn: executeQuery,
+        })
+        res.setHeader('Cache-Control', 'no-store')
+        return res.status(200).json(result)
+      } catch (err) {
+        console.error('Failed to rate book via POST:', err)
+        const isClientError =
+          err?.message?.includes('required') ||
+          err?.message?.includes('8-character')
+        return res.status(isClientError ? 400 : 500).json({
+          error: err?.message || 'Failed to rate book.',
+        })
+      }
+    }
+
     try {
       const executeQuery = req.dbQuery || (await createDefaultDbQuery())
       const result = await saveBookToShelf({
         userId,
         bookId,
-        shelf,
+        shelf: shelf || 'to-read',
         book,
+        rating,
         queryFn: executeQuery,
       })
       res.setHeader('Cache-Control', 'no-store')

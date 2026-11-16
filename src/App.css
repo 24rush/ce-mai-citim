@@ -147,16 +147,26 @@ body {
 .book-detail-backdrop {
   position: fixed;
   inset: 0;
-  display: grid;
-  place-items: center;
-  align-content: start;
-  padding-top: 70px;
-  padding-bottom: 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 12px;
+  box-sizing: border-box;
   background: rgba(6, 9, 20, 0.72);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  z-index: 30;
+  z-index: 1000;
   overflow-y: auto;
+}
+
+.profile-modal,
+.profile-modal *,
+.book-detail-modal,
+.book-detail-modal *,
+.collection-modal,
+.collection-modal * {
+  box-sizing: border-box;
 }
 
 .profile-modal,
@@ -168,7 +178,7 @@ body {
   backdrop-filter: blur(28px) saturate(190%);
   -webkit-backdrop-filter: blur(28px) saturate(190%);
   border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 12px;
+  border-radius: 14px;
   box-shadow:
     0 24px 60px rgba(0, 0, 0, 0.7),
     0 0 40px rgba(139, 92, 246, 0.12),
@@ -178,10 +188,12 @@ body {
 
 .book-detail-modal {
   width: min(760px, calc(100% - 24px));
-  max-height: calc(100vh - 100px);
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
   overflow-y: auto;
   overflow-x: hidden;
   padding: 18px 18px 20px;
+  margin: auto;
   scrollbar-width: thin;
   scrollbar-color: rgba(139, 92, 246, 0.8) rgba(15, 23, 42, 0.5);
 }
@@ -192,13 +204,32 @@ body {
   width: min(440px, calc(100% - 24px));
 }
 
+.profile-modal {
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(139, 92, 246, 0.8) rgba(15, 23, 42, 0.5);
+}
+
+.profile-modal::-webkit-scrollbar {
+  width: 6px;
+}
+
+.profile-modal::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.8);
+  border-radius: 999px;
+}
+
 .search-modal-backdrop {
   position: fixed;
   inset: 0;
   width: 100vw;
   height: 100vh;
   height: 100dvh;
-  z-index: 40;
+  z-index: 1000;
   background: rgba(6, 9, 20, 0.72);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -335,7 +366,7 @@ body {
   z-index: 10;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   margin-bottom: 12px;
   width: 100%;
 }
@@ -677,6 +708,127 @@ body {
   background: rgba(139, 92, 246, 0.35);
   color: #c4b5fd;
   font-weight: 600;
+}
+
+/* Book Detail Rating Popup & Trigger */
+.book-detail-rating-section {
+  position: relative;
+  width: 100%;
+  margin-top: 6px;
+}
+
+.book-rate-trigger-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #94a3b8;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.book-rate-trigger-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(245, 180, 0, 0.35);
+  color: #f8fafc;
+}
+
+.book-rate-trigger-btn .star-lit {
+  color: #f5b400;
+  fill: #f5b400;
+}
+
+.book-rating-popup-wrapper {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.book-rating-popup {
+  position: relative;
+  width: 100%;
+  padding: 6px 8px;
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid rgba(245, 180, 0, 0.3);
+  border-radius: 10px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 12px rgba(245, 180, 0, 0.08);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: fadeInRatingPopup 0.18s ease-out;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+@keyframes fadeInRatingPopup {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.book-rating-popup-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin-bottom: 2px;
+  padding: 0 20px;
+  box-sizing: border-box;
+}
+
+.book-rating-popup-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #f1f5f9;
+  letter-spacing: -0.01em;
+  text-align: center;
+}
+
+.book-rating-popup-close-btn {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.book-rating-popup-close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f8fafc;
+}
+
+.book-rating-stars-row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  padding: 0;
+  margin: 0;
 }
 
 .book-detail-cover img {
@@ -1291,14 +1443,18 @@ body {
   display: flex;
   width: 100%;
   align-items: center;
+  justify-content: center;
   gap: 20px;
 }
 
 .books-carousel {
   display: flex;
   flex: 1 1 auto;
+  min-width: 0;
   gap: 12px;
   overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
   padding: 40px 8px 20px;
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.6) transparent;
@@ -1310,8 +1466,11 @@ body {
 
 .loading-carousel {
   width: 100%;
-  min-width: 100%;
+  min-width: 0;
   flex: 1 1 auto;
+  min-height: 360px;
+  align-items: center;
+  justify-content: center;
 }
 
 .books-carousel:active {
@@ -1338,6 +1497,7 @@ body {
   align-items: center;
   gap: 14px;
   transform: translateY(var(--card-translate-y));
+  touch-action: pan-x pan-y;
   box-shadow: none !important;
 }
 
@@ -1354,6 +1514,7 @@ body {
   cursor: pointer;
   transform: scale(var(--card-scale));
   transform-origin: center bottom;
+  touch-action: pan-x pan-y;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1385,7 +1546,7 @@ body {
   transition: transform 0.5s ease;
 }
 
-.book-3d-wrapper .book > :first-child {
+.book-3d-wrapper .book> :first-child {
   position: absolute;
   top: 0;
   left: 0;
@@ -1406,9 +1567,8 @@ body {
   transform: translateZ(0px);
   border-radius: 0 2px 2px 0;
   box-shadow: inset 1px 0 3px rgba(0, 0, 0, 0.25);
-  background: linear-gradient(90deg, 
-    #fff 0%, #f9f9f9 20%, #fff 40%, #f9f9f9 60%, #fff 80%, #f9f9f9 100%
-  );
+  background: linear-gradient(90deg,
+      #fff 0%, #f9f9f9 20%, #fff 40%, #f9f9f9 60%, #fff 80%, #f9f9f9 100%);
 }
 
 .book-3d-wrapper .book::after {
@@ -1566,10 +1726,6 @@ body {
   letter-spacing: 0.04em;
 }
 
-.loading-carousel {
-  min-height: 360px;
-  align-items: center;
-}
 
 .loading-card {
   min-width: 180px;
@@ -1689,9 +1845,9 @@ body {
   }
 
   .profile-modal-backdrop {
-    place-items: start center;
-    align-content: flex-start;
-    padding-top: 72px;
+    padding: 16px 10px;
+    align-items: center;
+    justify-content: center;
   }
 
   .profile-url-trigger-round {
@@ -1747,14 +1903,25 @@ body {
   .books-carousel {
     width: 100%;
     min-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden !important;
+    overscroll-behavior-x: contain;
     padding-left: 12px;
     padding-right: 12px;
-    padding-top: 45px;
+    padding-top: 40px;
     padding-bottom: 12px;
+    touch-action: pan-x pan-y;
+  }
+
+  .loading-carousel {
+    justify-content: flex-start;
   }
 
   .book-card {
     min-width: 190px;
+    transform: none !important;
+    --card-translate-y: 0px !important;
+    touch-action: pan-x pan-y;
   }
 
   .nav-button {
