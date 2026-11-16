@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
-import { BookCover } from 'book-cover-3d'
 import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FolderPlus, Library, Loader2, Lock, LogOut, Plus, Save, Search, Share2, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
 import {
   buildBookShareUrl,
@@ -117,72 +116,117 @@ const fetchBooksFromApi = async (apiUrl, signal) => {
   }
 }
 
-function DeferredBookCover({ src, alt, priority = false }) {
-  const [isVisible, setIsVisible] = useState(priority)
+function BookCover3D({ thickness = 24, children }) {
+  return (
+    <div
+      className="book-3d-wrapper"
+      style={{ '--book-thickness': `${thickness}px` }}
+    >
+      <div className="book">
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function BookCoverCard({
+  book,
+  isPriority = false,
+  onClick,
+}) {
+  const [isInView, setIsInView] = useState(isPriority)
   const [isLoaded, setIsLoaded] = useState(false)
   const [hasError, setHasError] = useState(false)
   const containerRef = useRef(null)
+  const hasLoadedRef = useRef(false)
+  const safeCoverUrl = book?.imageUrl || ''
 
   useEffect(() => {
+    hasLoadedRef.current = false
     setIsLoaded(false)
     setHasError(false)
-  }, [src])
+  }, [safeCoverUrl])
 
   useEffect(() => {
-    if (priority) {
-      setIsVisible(true)
-      return undefined
+    if (isPriority) {
+      setIsInView(true)
     }
-    if (isVisible) return undefined
+  }, [isPriority])
 
+  useEffect(() => {
     const el = containerRef.current
     if (!el) return undefined
 
     if (typeof IntersectionObserver === 'undefined') {
-      setIsVisible(true)
+      setIsInView(true)
       return undefined
     }
-
-    const scrollParent = el.closest('.books-carousel')
 
     const observer = new IntersectionObserver(
       (entries) => {
         const [entry] = entries
-        if (entry && entry.isIntersecting) {
-          setIsVisible(true)
-          observer.disconnect()
+        if (entry) {
+          setIsInView(entry.isIntersecting)
         }
       },
       {
-        root: scrollParent || null,
-        rootMargin: '350px',
+        rootMargin: '350px 450px',
       }
     )
 
     observer.observe(el)
     return () => observer.disconnect()
-  }, [priority, isVisible])
+  }, [])
 
   return (
-    <div ref={containerRef} className="book-cover-art">
-      {isVisible && src && !hasError ? (
-        <img
-          src={src}
-          alt={alt}
-          loading="lazy"
-          decoding="async"
-          onLoad={() => setIsLoaded(true)}
-          onError={() => setHasError(true)}
-          ref={(imgNode) => {
-            if (imgNode && imgNode.complete && imgNode.naturalWidth > 0 && !isLoaded) {
-              setIsLoaded(true)
-            }
-          }}
-          className={isLoaded ? 'loaded' : ''}
-        />
-      ) : null}
-      {(!isLoaded || !src || hasError) && (
-        <div className="book-cover-placeholder" aria-hidden="true" />
+    <div
+      ref={containerRef}
+      className="book-cover-surface"
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onClick?.()
+        }
+      }}
+      aria-label={`Deschide detaliile pentru ${book?.title || 'carte'}`}
+    >
+      {isInView ? (
+        <BookCover3D thickness={book?.thickness}>
+          <div className="book-cover-art">
+            {safeCoverUrl && !hasError ? (
+              <img
+                src={safeCoverUrl}
+                alt={`${book?.title || 'Carte'} cover`}
+                loading="lazy"
+                decoding="async"
+                onLoad={() => {
+                  hasLoadedRef.current = true
+                  setIsLoaded(true)
+                }}
+                onError={() => setHasError(true)}
+                ref={(imgNode) => {
+                  if (imgNode && imgNode.complete && imgNode.naturalWidth > 0 && !hasLoadedRef.current) {
+                    hasLoadedRef.current = true
+                    setIsLoaded(true)
+                  }
+                }}
+                className={isLoaded || hasLoadedRef.current ? 'loaded' : ''}
+              />
+            ) : null}
+            {(!isLoaded && !hasLoadedRef.current || !safeCoverUrl || hasError) && (
+              <div className="book-cover-placeholder" aria-hidden="true" />
+            )}
+          </div>
+        </BookCover3D>
+      ) : (
+        <div className="book-cover-placeholder-flat" aria-hidden="true">
+          <div className="book-cover-art">
+            <div className="book-cover-placeholder" />
+          </div>
+        </div>
       )}
     </div>
   )
@@ -219,13 +263,12 @@ function CollectionRow({
     const observer = new IntersectionObserver(
       (entries) => {
         const [entry] = entries
-        if (entry && entry.isIntersecting) {
-          setIsRowInView(true)
-          observer.disconnect()
+        if (entry) {
+          setIsRowInView(entry.isIntersecting)
         }
       },
       {
-        rootMargin: '400px 0px',
+        rootMargin: '450px 0px',
       }
     )
 
@@ -382,40 +425,14 @@ function CollectionRow({
 
               return (
                 <article key={`${collection.id}-${book.bookId || book.id}`} className="book-card">
-                  <div
-                    className="book-cover-surface"
-                    role="button"
-                    tabIndex={0}
+                  <BookCoverCard
+                    book={book}
+                    isPriority={isRowInView && index < 4}
                     onClick={() => {
                       if (rowDragRef.current.active || rowTapMovedRef.current) return
                       onBookClick?.(book, { ...collection, books: normalizedBooks })
                     }}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault()
-                        onBookClick?.(book, { ...collection, books: normalizedBooks })
-                      }
-                    }}
-                    aria-label={`Deschide detaliile pentru ${book.title}`}
-                  >
-                    <BookCover
-                      width={180}
-                      height={260}
-                      thickness={book.thickness}
-                      rotate={20}
-                      rotateHover={30}
-                      perspective={900}
-                      pagesOffset={4}
-                      bgColor="#0f172a"
-                      shadowColor="transparent"
-                    >
-                      <DeferredBookCover
-                        src={safeCoverUrl}
-                        alt={`${book.title} cover`}
-                        priority={isRowInView && index < 4}
-                      />
-                    </BookCover>
-                  </div>
+                  />
 
                   <div className="book-meta">
                     <h2
@@ -2177,23 +2194,33 @@ function App() {
       }
 
       const carousel = carouselRef.current
-      const carouselRect = carousel.getBoundingClientRect()
-      const carouselCenter = carouselRect.left + carousel.clientWidth / 2
-      const maxDistance = carousel.clientWidth * 0.72
+      const scrollLeft = carousel.scrollLeft
+      const clientWidth = carousel.clientWidth
+      const carouselCenter = clientWidth / 2
+      const maxDistance = clientWidth * 0.72
       const cards = carousel.querySelectorAll('.book-card')
 
-      // Phase 1: Pure DOM reads - calculate all transform values without touching styles
+      // Phase 1: Pure reads - calculate transform values
       const updates = []
-      const minBound = carouselRect.left - 300
-      const maxBound = carouselRect.right + 300
 
       for (let i = 0; i < cards.length; i += 1) {
         const card = cards[i]
-        const rect = card.getBoundingClientRect()
-        if (rect.right < minBound || rect.left > maxBound) {
+        const cardWidth = card.offsetWidth || 190
+        const relLeft = card.offsetLeft - scrollLeft
+        const relRight = relLeft + cardWidth
+
+        // If card is outside the active focus zone, clear custom property if it had one
+        if (relRight < -150 || relLeft > clientWidth + 150) {
+          if (card.dataset.customized === '1') {
+            card.style.removeProperty('--card-scale')
+            card.style.removeProperty('--card-translate-y')
+            card.style.removeProperty('--card-opacity')
+            delete card.dataset.customized
+          }
           continue
         }
-        const cardCenter = rect.left + rect.width / 2
+
+        const cardCenter = relLeft + cardWidth / 2
         const distanceFromCenter = Math.abs(cardCenter - carouselCenter)
         const ratio = Math.max(0, 1 - distanceFromCenter / maxDistance)
         const scale = (0.85 + ratio * 0.28).toFixed(3)
@@ -2203,12 +2230,13 @@ function App() {
         updates.push({ card, scale, translateY, opacity })
       }
 
-      // Phase 2: Pure DOM writes - apply styles in a batch (zero layout thrashing)
+      // Phase 2: Batch writes
       for (let i = 0; i < updates.length; i += 1) {
         const { card, scale, translateY, opacity } = updates[i]
         card.style.setProperty('--card-scale', scale)
         card.style.setProperty('--card-translate-y', translateY)
         card.style.setProperty('--card-opacity', opacity)
+        card.dataset.customized = '1'
       }
     })
   }
@@ -2326,9 +2354,9 @@ function App() {
               thumbColor="#8b5cf6"
               textColor="#f4f4f5"
               activeTextColor="#ffffff"
-              size="lg"
-              radius={10}
-              inset={3}
+              size="md"
+              radius={12}
+              inset={2}
               equalSlots
               stretch={100}
               squash={3}
@@ -2466,6 +2494,15 @@ function App() {
                   title="Înapoi"
                 >
                   <ArrowLeft size={18} />
+                </button>
+                <button
+                  type="button"
+                  className="modal-close-btn"
+                  onClick={closeBookDetails}
+                  aria-label="Închide detaliile cărții"
+                  title="Închide"
+                >
+                  <X size={18} />
                 </button>
               </div>
 
@@ -2666,11 +2703,12 @@ function App() {
                   )}
                   <button
                     type="button"
-                    className="toolbar-clear-button"
+                    className="modal-close-btn"
                     onClick={() => setShowProfileModal(false)}
-                    aria-label="Close profile URL popup"
+                    aria-label="Închide profilul"
+                    title="Închide"
                   >
-                    ×
+                    <X size={18} />
                   </button>
                 </div>
 
@@ -2970,37 +3008,11 @@ function App() {
 
                     return (
                       <article key={book.id} className="book-card">
-                        <div
-                          className="book-cover-surface"
-                          role="button"
-                          tabIndex={0}
+                        <BookCoverCard
+                          book={book}
+                          isPriority={index < 6}
                           onClick={() => handleBookTap(book)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault()
-                              openBookDetails(book)
-                            }
-                          }}
-                          aria-label={`Deschide detaliile pentru ${book.title}`}
-                        >
-                          <BookCover
-                            width={180}
-                            height={260}
-                            thickness={book.thickness}
-                            rotate={20}
-                            rotateHover={30}
-                            perspective={900}
-                            pagesOffset={4}
-                            bgColor="#0f172a"
-                            shadowColor="transparent"
-                          >
-                            <DeferredBookCover
-                              src={safeCoverUrl}
-                              alt={`${book.title} cover`}
-                              priority={index < 6}
-                            />
-                          </BookCover>
-                        </div>
+                        />
 
                         <div className="book-meta">
                           <h2
@@ -3111,7 +3123,7 @@ function App() {
 
         {showNewCollectionInput && (
           <div
-            className="search-modal-backdrop"
+            className="profile-modal-backdrop"
             onClick={() => {
               setShowNewCollectionInput(false)
               setNewCollectionTitle('')
@@ -3120,7 +3132,7 @@ function App() {
             }}
           >
             <div
-              className="search-modal"
+              className="profile-modal collection-modal"
               onClick={(e) => e.stopPropagation()}
               role="dialog"
               aria-modal="true"
@@ -3132,7 +3144,7 @@ function App() {
                 </h2>
                 <button
                   type="button"
-                  className="search-modal-close"
+                  className="modal-close-btn"
                   onClick={() => {
                     setShowNewCollectionInput(false)
                     setNewCollectionTitle('')
@@ -3140,6 +3152,7 @@ function App() {
                     setNewCollectionIsPrivate(false)
                   }}
                   aria-label="Închide"
+                  title="Închide"
                 >
                   <X size={18} />
                 </button>
@@ -3246,12 +3259,13 @@ function App() {
                 </h2>
                 <button
                   type="button"
-                  className="search-modal-close"
+                  className="modal-close-btn"
                   onClick={() => {
                     setIsSearchModalOpen(false)
                     setTargetCollectionForSearch(null)
                   }}
                   aria-label="Închide căutarea"
+                  title="Închide"
                 >
                   <X size={18} />
                 </button>
