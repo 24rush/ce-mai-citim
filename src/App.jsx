@@ -21,6 +21,7 @@ import AuthModalView from './components/AuthModalView'
 import { createClient, isSupabaseConfigured } from './lib/client'
 import './App.css'
 
+
 const SHELF_OPTIONS = [
   { id: 'read', label: 'Citite', query: 'read' },
   { id: 'to-read', label: 'De citit', query: 'to-read' },
@@ -116,6 +117,77 @@ const fetchBooksFromApi = async (apiUrl, signal) => {
   }
 }
 
+function DeferredBookCover({ src, alt, priority = false }) {
+  const [isVisible, setIsVisible] = useState(priority)
+  const [isLoaded, setIsLoaded] = useState(false)
+  const [hasError, setHasError] = useState(false)
+  const containerRef = useRef(null)
+
+  useEffect(() => {
+    setIsLoaded(false)
+    setHasError(false)
+  }, [src])
+
+  useEffect(() => {
+    if (priority) {
+      setIsVisible(true)
+      return undefined
+    }
+    if (isVisible) return undefined
+
+    const el = containerRef.current
+    if (!el) return undefined
+
+    if (typeof IntersectionObserver === 'undefined') {
+      setIsVisible(true)
+      return undefined
+    }
+
+    const scrollParent = el.closest('.books-carousel')
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const [entry] = entries
+        if (entry && entry.isIntersecting) {
+          setIsVisible(true)
+          observer.disconnect()
+        }
+      },
+      {
+        root: scrollParent || null,
+        rootMargin: '350px',
+      }
+    )
+
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [priority, isVisible])
+
+  return (
+    <div ref={containerRef} className="book-cover-art">
+      {isVisible && src && !hasError ? (
+        <img
+          src={src}
+          alt={alt}
+          loading="lazy"
+          decoding="async"
+          onLoad={() => setIsLoaded(true)}
+          onError={() => setHasError(true)}
+          ref={(imgNode) => {
+            if (imgNode && imgNode.complete && imgNode.naturalWidth > 0 && !isLoaded) {
+              setIsLoaded(true)
+            }
+          }}
+          className={isLoaded ? 'loaded' : ''}
+        />
+      ) : null}
+      {(!isLoaded || !src || hasError) && (
+        <div className="book-cover-placeholder" aria-hidden="true" />
+      )}
+    </div>
+  )
+}
+
 function CollectionRow({
   collection,
   isOwner,
@@ -125,14 +197,41 @@ function CollectionRow({
   onDeleteCollection,
   onBookClick,
 }) {
+  const rowContainerRef = useRef(null)
   const rowCarouselRef = useRef(null)
   const rowDragRef = useRef({ isDown: false, active: false, pointerId: null, startX: 0, startY: 0, scrollLeft: 0 })
   const rowTapMovedRef = useRef(false)
+  const [isRowInView, setIsRowInView] = useState(false)
 
   const normalizedBooks = useMemo(
     () => (Array.isArray(collection.books) ? collection.books.map((b, idx) => normalizeCsvBook(b, idx)) : []),
     [collection.books],
   )
+
+  useEffect(() => {
+    const el = rowContainerRef.current
+    if (!el) return undefined
+    if (typeof IntersectionObserver === 'undefined') {
+      setIsRowInView(true)
+      return undefined
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const [entry] = entries
+        if (entry && entry.isIntersecting) {
+          setIsRowInView(true)
+          observer.disconnect()
+        }
+      },
+      {
+        rootMargin: '400px 0px',
+      }
+    )
+
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   const scrollRow = (direction) => {
     if (!rowCarouselRef.current) return
@@ -192,7 +291,7 @@ function CollectionRow({
   }
 
   return (
-    <div className="collection-row-card">
+    <div ref={rowContainerRef} className="collection-row-card">
       <div className="collection-row-header">
         <div className="collection-row-title-group">
           <h3 className="collection-row-title">{collection.title}</h3>
@@ -278,7 +377,7 @@ function CollectionRow({
           ) : null}
 
           <div className="books-carousel collection-row-carousel" ref={rowCarouselRef}>
-            {normalizedBooks.map((book) => {
+            {normalizedBooks.map((book, index) => {
               const safeCoverUrl = book.imageUrl || ''
 
               return (
@@ -310,13 +409,11 @@ function CollectionRow({
                       bgColor="#0f172a"
                       shadowColor="transparent"
                     >
-                      <div className="book-cover-art">
-                        {safeCoverUrl ? (
-                          <img src={safeCoverUrl} alt={`${book.title} cover`} loading="lazy" />
-                        ) : (
-                          <div className="book-cover-placeholder" aria-hidden="true" />
-                        )}
-                      </div>
+                      <DeferredBookCover
+                        src={safeCoverUrl}
+                        alt={`${book.title} cover`}
+                        priority={isRowInView && index < 4}
+                      />
                     </BookCover>
                   </div>
 
@@ -390,6 +487,7 @@ function App() {
   const [generatedProfileUrl, setGeneratedProfileUrl] = useState('')
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('')
   const [copiedUrl, setCopiedUrl] = useState(false)
+  const [sharedUrl, setSharedUrl] = useState(false)
   const [bookQrCodeDataUrl, setBookQrCodeDataUrl] = useState('')
   const [requestedBookId, setRequestedBookId] = useState(() => initialRouteState.bookId || '')
   const [selectedBook, setSelectedBook] = useState(null)
@@ -564,7 +662,10 @@ function App() {
   }, [isExploreMode, collectionsRefreshTrigger])
 
   useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < 768)
+    const handleResize = () => {
+      const next = window.innerWidth < 768
+      setIsMobile((prev) => (prev === next ? prev : next))
+    }
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
@@ -1884,6 +1985,46 @@ function App() {
     }
   }
 
+  const handleShareGeneratedUrl = async () => {
+    if (!generatedProfileUrl) {
+      return
+    }
+
+    const shareTitle = displayNameInput ? `Librăria lui ${displayNameInput}` : 'Ce mai citim'
+    const shareText = displayNameInput
+      ? `Vezi cărțile citite de ${displayNameInput} pe Ce mai citim!`
+      : 'Vezi librăria pe Ce mai citim!'
+
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: shareTitle,
+          text: shareText,
+          url: generatedProfileUrl,
+        })
+        setSharedUrl(true)
+        setTimeout(() => setSharedUrl(false), 2000)
+        return
+      }
+
+      await navigator.clipboard.writeText(generatedProfileUrl)
+      setCopiedUrl(true)
+      setTimeout(() => setCopiedUrl(false), 2000)
+    } catch (shareError) {
+      if (shareError?.name === 'AbortError') {
+        return
+      }
+      console.error(shareError)
+      try {
+        await navigator.clipboard.writeText(generatedProfileUrl)
+        setCopiedUrl(true)
+        setTimeout(() => setCopiedUrl(false), 2000)
+      } catch (copyError) {
+        console.error(copyError)
+      }
+    }
+  }
+
   const handleOpenProfileModal = () => {
     const activeCookieId = cookieUserId || getUserIdFromCookie()
     const userFallbackName =
@@ -2041,19 +2182,34 @@ function App() {
       const maxDistance = carousel.clientWidth * 0.72
       const cards = carousel.querySelectorAll('.book-card')
 
-      cards.forEach((card) => {
+      // Phase 1: Pure DOM reads - calculate all transform values without touching styles
+      const updates = []
+      const minBound = carouselRect.left - 300
+      const maxBound = carouselRect.right + 300
+
+      for (let i = 0; i < cards.length; i += 1) {
+        const card = cards[i]
         const rect = card.getBoundingClientRect()
+        if (rect.right < minBound || rect.left > maxBound) {
+          continue
+        }
         const cardCenter = rect.left + rect.width / 2
         const distanceFromCenter = Math.abs(cardCenter - carouselCenter)
         const ratio = Math.max(0, 1 - distanceFromCenter / maxDistance)
-        const scale = 0.85 + ratio * 0.28
-        const translateY = (1 - ratio) * 14
-        const opacity = 0.75 + ratio * 0.25
+        const scale = (0.85 + ratio * 0.28).toFixed(3)
+        const translateY = `${((1 - ratio) * 14).toFixed(1)}px`
+        const opacity = (0.75 + ratio * 0.25).toFixed(3)
 
-        card.style.setProperty('--card-scale', scale.toFixed(3))
-        card.style.setProperty('--card-translate-y', `${translateY.toFixed(1)}px`)
-        card.style.setProperty('--card-opacity', opacity.toFixed(3))
-      })
+        updates.push({ card, scale, translateY, opacity })
+      }
+
+      // Phase 2: Pure DOM writes - apply styles in a batch (zero layout thrashing)
+      for (let i = 0; i < updates.length; i += 1) {
+        const { card, scale, translateY, opacity } = updates[i]
+        card.style.setProperty('--card-scale', scale)
+        card.style.setProperty('--card-translate-y', translateY)
+        card.style.setProperty('--card-opacity', opacity)
+      }
     })
   }
 
@@ -2073,12 +2229,16 @@ function App() {
       syncBookCoverFocus()
     }
 
+    const handleCarouselResize = () => {
+      syncBookCoverFocus()
+    }
+
     carousel.addEventListener('scroll', handleScroll, { passive: true })
-    window.addEventListener('resize', handleScroll)
+    window.addEventListener('resize', handleCarouselResize)
 
     return () => {
       carousel.removeEventListener('scroll', handleScroll)
-      window.removeEventListener('resize', handleScroll)
+      window.removeEventListener('resize', handleCarouselResize)
       if (rafIdRef.current) {
         cancelAnimationFrame(rafIdRef.current)
         rafIdRef.current = null
@@ -2198,11 +2358,11 @@ function App() {
                 activeColor="#8b5cf6"
                 textColor="#f4f4f5"
                 activeTextColor="#ffffff"
-                size="md"
-                gap={8}
+                size="sm"
+                gap={0}
                 radius={18}
                 swell={0.2}
-                barge={6}
+                barge={0}
                 shrink={0.05}
                 jelly={1}
                 bounce={0.25}
@@ -2222,7 +2382,7 @@ function App() {
                 activeColor="#8b5cf6"
                 textColor="#f4f4f5"
                 activeTextColor="#ffffff"
-                size="md"
+                size="sm"
                 gap={8}
                 radius={18}
                 swell={0.2}
@@ -2570,32 +2730,42 @@ function App() {
                         <label htmlFor="profile-csv-input" className="profile-modal-label">
                           Librărie Goodreads
                         </label>
-                        <label htmlFor="profile-csv-input" className="profile-file-upload">
-                          <Upload size={16} strokeWidth={2} aria-hidden="true" />
-                          <span className="profile-file-upload-text">
-                            {csvFile ? csvFile.name : 'Încarcă fișierul CSV exportat...'}
-                          </span>
-                        </label>
-                        <input
-                          id="profile-csv-input"
-                          type="file"
-                          accept=".csv,text/csv"
-                          onChange={handleCsvFileChange}
-                          className="profile-file-input-hidden"
-                        />
+                        <div className="profile-csv-row">
+                          <label htmlFor="profile-csv-input" className="profile-file-upload">
+                            <span className="profile-file-upload-text">
+                              {csvFile ? csvFile.name : 'Încarcă fișier CSV...'}
+                            </span>
+                          </label>
+                          <input
+                            id="profile-csv-input"
+                            type="file"
+                            accept=".csv,text/csv"
+                            onChange={handleCsvFileChange}
+                            className="profile-file-input-hidden"
+                          />
+                          <button
+                            type="submit"
+                            className="profile-modal-submit"
+                            disabled={isUploadingCsv || !displayNameInput.trim() || !csvFile}
+                            title={
+                              !csvFile
+                                ? 'Selectează un fișier CSV'
+                                : 'Actualizează librăria'
+                            }
+                          >
+                            {isUploadingCsv ? (
+                              <span className="profile-btn-loading">
+                                <Loader2 size={15} className="spin-icon" />
+                                <span>Se încarcă...</span>
+                              </span>
+                            ) : (
+                              'Încarcă'
+                            )}
+                          </button>
+                        </div>
                       </div>
 
                       {uploadError ? <p className="profile-modal-error">{uploadError}</p> : null}
-
-                      <button
-                        type="submit"
-                        className="profile-modal-submit"
-                        disabled={isUploadingCsv || !displayNameInput.trim() || !csvFile}
-                      >
-                        {isUploadingCsv
-                          ? 'Se încarcă...'
-                          : (cookieUserId ? 'Actualizează librăria' : 'Generează URL')}
-                      </button>
                     </form>
 
                     {generatedProfileUrl ? (
@@ -2603,23 +2773,34 @@ function App() {
                         <label className="profile-modal-label">
                           URL-ul tău pe 'Ce mai citim'
                         </label>
-                        <div className="profile-url-field">
-                          <a
-                            href={generatedProfileUrl}
-                            className="profile-url-text"
-                            onClick={() => setShowProfileModal(false)}
-                            title="Mergi la librăria ta"
-                          >
-                            {generatedProfileUrl}
-                          </a>
+                        <div className="profile-url-row">
+                          <div className="profile-url-field">
+                            <a
+                              href={generatedProfileUrl}
+                              className="profile-url-text"
+                              onClick={() => setShowProfileModal(false)}
+                              title="Mergi la librăria ta"
+                            >
+                              {generatedProfileUrl}
+                            </a>
+                            <button
+                              type="button"
+                              className={`profile-url-copy-icon-btn ${copiedUrl ? 'copied' : ''}`}
+                              onClick={handleCopyGeneratedUrl}
+                              aria-label="Copiază linkul"
+                              title={copiedUrl ? 'Copiat!' : 'Copiază linkul'}
+                            >
+                              {copiedUrl ? <Check size={16} /> : <Copy size={16} />}
+                            </button>
+                          </div>
                           <button
                             type="button"
-                            className={`profile-url-copy-icon-btn ${copiedUrl ? 'copied' : ''}`}
-                            onClick={handleCopyGeneratedUrl}
-                            aria-label="Copiază linkul"
-                            title={copiedUrl ? 'Copiat!' : 'Copiază linkul'}
+                            className={`profile-url-share-btn ${sharedUrl ? 'shared' : ''}`}
+                            onClick={handleShareGeneratedUrl}
+                            title="Distribuie linkul către librăria ta"
                           >
-                            {copiedUrl ? <Check size={16} /> : <Copy size={16} />}
+                            {sharedUrl ? <Check size={15} /> : <Share2 size={15} />}
+                            <span>{sharedUrl ? 'Distribuit!' : 'Distribuie'}</span>
                           </button>
                         </div>
 
@@ -2651,33 +2832,33 @@ function App() {
                   </div>
                 ))}
               </div>
-            ): (isExploreMode? exploreCollections: filteredUserCollections).length === 0 ? (
-            <div className="collections-empty-state">
-              <Library size={32} className="collections-empty-icon" />
-              <h2>
-                {isExploreMode
-                  ? 'Nu există încă nicio colecție publică.'
+            ) : (isExploreMode ? exploreCollections : filteredUserCollections).length === 0 ? (
+              <div className="collections-empty-state">
+                <Library size={32} className="collections-empty-icon" />
+                <h2>
+                  {isExploreMode
+                    ? 'Nu există încă nicio colecție publică.'
                     : userCollections.length > 0 && activeCollectionFilter === 'private'
-                ? 'Nu există nicio colecție privată.'
+                      ? 'Nu există nicio colecție privată.'
                       : userCollections.length > 0 && activeCollectionFilter === 'public'
-                ? 'Nu există nicio colecție publică.'
-                : isOwnProfile
-                ? 'Nu ai creat încă nicio colecție.'
+                        ? 'Nu există nicio colecție publică.'
+                        : isOwnProfile
+                          ? 'Nu ai creat încă nicio colecție.'
                           : 'Acest utilizator nu are încă nicio colecție.'}
-              </h2>
-              {!isExploreMode && isOwnProfile && !showNewCollectionInput ? (
-                <button
-                  type="button"
-                  className="collections-new-trigger-btn"
-                  onClick={() => setShowNewCollectionInput(true)}
-                >
-                  <Plus size={16} />
-                  <span>Creează prima ta colecție</span>
-                </button>
-              ) : null}
-            </div>
+                </h2>
+                {!isExploreMode && isOwnProfile && !showNewCollectionInput ? (
+                  <button
+                    type="button"
+                    className="collections-new-trigger-btn"
+                    onClick={() => setShowNewCollectionInput(true)}
+                  >
+                    <Plus size={16} />
+                    <span>Creează prima ta colecție</span>
+                  </button>
+                ) : null}
+              </div>
             ) : (
-            <div className="collections-rows-list">
+              <div className="collections-rows-list">
                 {
                   (isExploreMode ? exploreCollections : filteredUserCollections).map((collection) => {
                     const activeUser = cookieUserId || getUserIdFromCookie()
@@ -2721,7 +2902,7 @@ function App() {
                     size="md"
                     align="left"
                     placement='bottom'
-                    radius={16}
+                    radius={10}
                     menuWidth={240}
                     icon={<UserSearch size={13} strokeWidth={2} />}
                   />
@@ -2784,7 +2965,7 @@ function App() {
                 </div>
               ) : (
                 <div className="books-carousel" ref={carouselRef}>
-                  {visibleBooks.map((book) => {
+                  {visibleBooks.map((book, index) => {
                     const safeCoverUrl = book.imageUrl || ''
 
                     return (
@@ -2813,13 +2994,11 @@ function App() {
                             bgColor="#0f172a"
                             shadowColor="transparent"
                           >
-                            <div className="book-cover-art">
-                              {safeCoverUrl ? (
-                                <img src={safeCoverUrl} alt={`${book.title} cover`} loading="lazy" />
-                              ) : (
-                                <div className="book-cover-placeholder" aria-hidden="true" />
-                              )}
-                            </div>
+                            <DeferredBookCover
+                              src={safeCoverUrl}
+                              alt={`${book.title} cover`}
+                              priority={index < 6}
+                            />
                           </BookCover>
                         </div>
 
