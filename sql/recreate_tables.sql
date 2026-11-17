@@ -10,6 +10,7 @@ DROP TABLE IF EXISTS users CASCADE;
 CREATE TABLE users (
   user_id VARCHAR(8) PRIMARY KEY,
   display_name TEXT NOT NULL,
+  description VARCHAR(140) DEFAULT '',
   auth_user_id TEXT,
   last_access TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

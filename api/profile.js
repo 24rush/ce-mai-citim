@@ -18,40 +18,88 @@ export const ensureAuthUserIdColumn = async (queryFn) => {
   }
 }
 
-export const updateDisplayName = async ({ userId, authUserId, displayName, queryFn }) => {
-  const executeQuery = queryFn || (await createDefaultDbQuery())
-  await ensureAuthUserIdColumn(executeQuery)
-
-  const cleanName = String(displayName || '').trim()
-  if (!cleanName) {
-    throw new Error('Display name cannot be empty.')
+export const ensureUserProfileColumns = async (queryFn) => {
+  await ensureAuthUserIdColumn(queryFn)
+  try {
+    await queryFn('ALTER TABLE users ADD COLUMN IF NOT EXISTS description VARCHAR(140) DEFAULT \'\';')
+  } catch {
+    // Ignore schema update errors
   }
+}
+
+export const updateUserProfile = async ({ userId, authUserId, displayName, description, queryFn }) => {
+  const executeQuery = queryFn || (await createDefaultDbQuery())
+  await ensureUserProfileColumns(executeQuery)
+
   const cleanUserId = String(userId || '').trim()
   const cleanAuthId = String(authUserId || '').trim()
   if (!cleanUserId && !cleanAuthId) {
     throw new Error('userId or authUserId is required.')
   }
 
+  const updates = []
+  const values = []
+  let paramIdx = 1
+
+  let cleanName = null
+  if (displayName !== undefined) {
+    cleanName = String(displayName || '').trim()
+    if (!cleanName) {
+      throw new Error('Display name cannot be empty.')
+    }
+    updates.push(`display_name = $${paramIdx++}`)
+    values.push(cleanName)
+  }
+
+  let cleanDesc = null
+  if (description !== undefined) {
+    cleanDesc = String(description || '').slice(0, 140).trim()
+    updates.push(`description = $${paramIdx++}`)
+    values.push(cleanDesc)
+  }
+
+  if (updates.length === 0) {
+    throw new Error('No fields provided to update.')
+  }
+
+  updates.push('last_access = NOW()')
+  values.push(cleanUserId)
+  const userIdParam = paramIdx++
+  values.push(cleanAuthId)
+  const authIdParam = paramIdx++
+
   await executeQuery(
     `UPDATE users
-     SET display_name = $1, last_access = NOW()
-     WHERE (user_id = $2 AND $2 <> '') OR (auth_user_id = $3 AND $3 <> '');`,
-    [cleanName, cleanUserId, cleanAuthId],
+     SET ${updates.join(', ')}
+     WHERE (user_id = $${userIdParam} AND $${userIdParam} <> '') OR (auth_user_id = $${authIdParam} AND $${authIdParam} <> '');`,
+    values,
   )
 
-  return { success: true, displayName: cleanName }
+  const result = { success: true }
+  if (cleanName !== null) result.displayName = cleanName
+  if (cleanDesc !== null) result.description = cleanDesc
+  return result
+}
+
+export const updateDisplayName = async ({ userId, authUserId, displayName, queryFn }) => {
+  return updateUserProfile({ userId, authUserId, displayName, queryFn })
+}
+
+export const updateDescription = async ({ userId, authUserId, description, queryFn }) => {
+  return updateUserProfile({ userId, authUserId, description, queryFn })
 }
 
 export const syncUserProfile = async ({
   authUserId,
   email = '',
   displayName = '',
+  description = '',
   existingUserId = '',
   baseUrl = '',
   queryFn,
 }) => {
   const executeQuery = queryFn || (await createDefaultDbQuery())
-  await ensureAuthUserIdColumn(executeQuery)
+  await ensureUserProfileColumns(executeQuery)
 
   const cleanAuthId = String(authUserId || '').trim()
   if (!cleanAuthId) {
@@ -63,7 +111,7 @@ export const syncUserProfile = async ({
 
   // 1. Check if user already exists for this auth_user_id
   const existingUserRows = await executeQuery(
-    'SELECT user_id, display_name, auth_user_id FROM users WHERE auth_user_id = $1 LIMIT 1;',
+    'SELECT user_id, display_name, auth_user_id, COALESCE(description, \'\') AS description FROM users WHERE auth_user_id = $1 LIMIT 1;',
     [cleanAuthId],
   )
 
@@ -74,6 +122,7 @@ export const syncUserProfile = async ({
     return {
       userId: row.user_id,
       displayName: row.display_name,
+      description: row.description || '',
       profileUrl,
       url: profileUrl,
       isNew: false,
@@ -91,7 +140,7 @@ export const syncUserProfile = async ({
 
   if (isValidExistingId) {
     const existingByIdRows = await executeQuery(
-      'SELECT user_id, auth_user_id, display_name FROM users WHERE user_id = $1 LIMIT 1;',
+      'SELECT user_id, auth_user_id, display_name, COALESCE(description, \'\') AS description FROM users WHERE user_id = $1 LIMIT 1;',
       [cleanExistingId],
     )
 
@@ -116,13 +165,13 @@ export const syncUserProfile = async ({
   if (!targetUserId) {
     targetUserId = generateUserId()
     await executeQuery(
-      `INSERT INTO users (user_id, display_name, auth_user_id, last_access)
-       VALUES ($1, $2, $3, NOW())
+      `INSERT INTO users (user_id, display_name, auth_user_id, description, last_access)
+       VALUES ($1, $2, $3, $4, NOW())
        ON CONFLICT (user_id) DO UPDATE SET
          auth_user_id = COALESCE(users.auth_user_id, EXCLUDED.auth_user_id),
          display_name = COALESCE(NULLIF(users.display_name, ''), EXCLUDED.display_name),
          last_access = NOW();`,
-      [targetUserId, fallbackDisplayName, cleanAuthId],
+      [targetUserId, fallbackDisplayName, cleanAuthId, String(description || '').slice(0, 140).trim()],
     )
   }
 
@@ -130,6 +179,7 @@ export const syncUserProfile = async ({
   return {
     userId: targetUserId,
     displayName: fallbackDisplayName,
+    description: String(description || '').slice(0, 140).trim(),
     profileUrl,
     url: profileUrl,
     isNew: true,
@@ -151,29 +201,35 @@ export default async function handler(req, res) {
     }
   }
 
-  // Handle display name update
-  if (req.method === 'PATCH' || req.method === 'PUT' || body.action === 'update_name') {
-    const newName = body.displayName || req.query?.displayName
+  // Handle display name or description update
+  if (req.method === 'PATCH' || req.method === 'PUT' || body.action === 'update_name' || body.action === 'update_description' || body.action === 'update_profile') {
+    const newName = body.displayName ?? req.query?.displayName
+    const newDescription = body.description ?? req.query?.description
     const userId = body.userId || req.query?.userId
     const authUserId = body.authUserId || req.query?.authUserId
 
-    if (!newName || !String(newName).trim()) {
-      return res.status(400).json({ error: 'Display name is required.' })
+    if (newName === undefined && newDescription === undefined) {
+      return res.status(400).json({ error: 'displayName or description is required.' })
+    }
+
+    if (newName !== undefined && !String(newName).trim()) {
+      return res.status(400).json({ error: 'Display name cannot be empty.' })
     }
 
     try {
       const executeQuery = req.dbQuery || (await createDefaultDbQuery())
-      const result = await updateDisplayName({
+      const result = await updateUserProfile({
         userId,
         authUserId,
         displayName: newName,
+        description: newDescription,
         queryFn: executeQuery,
       })
       res.setHeader('Cache-Control', 'no-store')
       return res.status(200).json(result)
     } catch (err) {
-      console.error('Failed to update display name:', err)
-      return res.status(500).json({ error: err?.message || 'Failed to update display name.' })
+      console.error('Failed to update profile:', err)
+      return res.status(500).json({ error: err?.message || 'Failed to update profile.' })
     }
   }
 

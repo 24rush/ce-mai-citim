@@ -183,6 +183,7 @@ const PeekRating: React.FC<PeekRatingProps> = ({
   };
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
     if (!interactive || e.button !== 0 || st.current.pointerId !== null) return;
     rootRef.current?.removeAttribute('data-instant');
     try {
@@ -195,6 +196,7 @@ const PeekRating: React.FC<PeekRatingProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
     if (!interactive) return;
     const { pressing, pointerId } = st.current;
     if (e.pointerType !== 'mouse' && !pressing) return;
@@ -204,6 +206,7 @@ const PeekRating: React.FC<PeekRatingProps> = ({
   };
 
   const endPress = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
     const { pressing, pointerId, hover } = st.current;
     if (!pressing || e.pointerId !== pointerId) return;
     st.current.pressing = false;
@@ -302,6 +305,9 @@ const PeekRating: React.FC<PeekRatingProps> = ({
       className={`group inline-flex justify-center max-w-full font-[inherit] text-inherit aria-disabled:pointer-events-none aria-disabled:opacity-50${className ? ` ${className}` : ''}`}
       style={cssVars}
       onKeyDown={readOnly ? undefined : handleKeyDown}
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onPointerUp={(e) => e.stopPropagation()}
     >
       <div
         ref={rowRef}
@@ -337,6 +343,7 @@ const PeekRating: React.FC<PeekRatingProps> = ({
               aria-label={readOnly ? undefined : label}
               aria-hidden={readOnly || undefined}
               tabIndex={!interactive ? -1 : (value === 0 ? i === 0 : checked) ? 0 : -1}
+              onClick={(e) => e.stopPropagation()}
             >
               <span
                 ref={el => {

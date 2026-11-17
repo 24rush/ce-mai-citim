@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
-import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FolderPlus, Library, Loader2, Lock, LogOut, Plus, Save, Search, Share2, Star, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
+import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FolderPlus, Globe, Library, Loader2, Lock, LogOut, Plus, Save, Search, Share2, Star, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
 import PeekRating from './components/PeekRating'
 import {
   buildBookShareUrl,
@@ -95,10 +95,11 @@ const fetchBooksFromApi = async (apiUrl, signal) => {
   ) {
     const data = JSON.parse(trimmedText)
     const username = data?.username || data?.displayName || ''
+    const description = data?.description || ''
 
     if (typeof data?.csv === 'string') {
       const csvBooks = parseGoodreadsCsv(data.csv)
-      return { username, books: csvBooks }
+      return { username, description, books: csvBooks }
     }
 
     const rawBooks = Array.isArray(data?.books) ? data.books : Array.isArray(data) ? data : []
@@ -106,6 +107,7 @@ const fetchBooksFromApi = async (apiUrl, signal) => {
 
     return {
       username,
+      description,
       books: normalizedBooks,
     }
   }
@@ -113,6 +115,7 @@ const fetchBooksFromApi = async (apiUrl, signal) => {
   const csvBooks = parseGoodreadsCsv(responseText)
   return {
     username: '',
+    description: '',
     books: csvBooks,
   }
 }
@@ -245,6 +248,8 @@ function CollectionRow({
   onSelectCreator,
   onAddBookClick,
   onDeleteCollection,
+  onTogglePrivacy,
+  isTogglingPrivacy,
   onBookClick,
 }) {
   const rowContainerRef = useRef(null)
@@ -344,10 +349,31 @@ function CollectionRow({
       <div className="collection-row-header">
         <div className="collection-row-title-group">
           <h3 className="collection-row-title">{collection.title}</h3>
-          <span className="collection-row-count">
-            {normalizedBooks.length} {normalizedBooks.length === 1 ? 'carte' : 'cărți'}
-          </span>
-          {collection.isPrivate ? (
+          {isOwner ? (
+            <button
+              type="button"
+              className={`collection-row-privacy-btn ${collection.isPrivate ? 'is-private' : 'is-public'}`}
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                onTogglePrivacy?.(collection)
+              }}
+              disabled={isTogglingPrivacy}
+              title={
+                collection.isPrivate
+                  ? 'Colecție privată. Apasă pentru a o face publică'
+                  : 'Colecție publică. Apasă pentru a o face privată'
+              }
+              aria-label={
+                collection.isPrivate
+                  ? 'Colecție privată. Schimbă în publică'
+                  : 'Colecție publică. Schimbă în privată'
+              }
+            >
+              {collection.isPrivate ? <Lock size={12} /> : <Globe size={12} />}
+              <span>{collection.isPrivate ? 'Privată' : 'Publică'}</span>
+            </button>
+          ) : collection.isPrivate ? (
             <span className="collection-row-private-badge" title="Vizibilă doar pentru tine">
               <Lock size={12} />
               <span>Privată</span>
@@ -502,11 +528,15 @@ function App() {
   const [isCheckingAuth, setIsCheckingAuth] = useState(() => isSupabaseConfigured())
   const [showProfileModal, setShowProfileModal] = useState(false)
   const [displayNameInput, setDisplayNameInput] = useState('')
+  const [descriptionInput, setDescriptionInput] = useState('')
+  const [userDescription, setUserDescription] = useState('')
   const [csvFile, setCsvFile] = useState(null)
   const [isUploadingCsv, setIsUploadingCsv] = useState(false)
   const [uploadError, setUploadError] = useState('')
   const [savedName, setSavedName] = useState(false)
   const [isSavingName, setIsSavingName] = useState(false)
+  const [savedDescription, setSavedDescription] = useState(false)
+  const [isSavingDescription, setIsSavingDescription] = useState(false)
   const [generatedProfileUrl, setGeneratedProfileUrl] = useState('')
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('')
   const [copiedUrl, setCopiedUrl] = useState(false)
@@ -568,6 +598,7 @@ function App() {
   const [modalSwipeExit, setModalSwipeExit] = useState(null)
   const [modalToast, setModalToast] = useState('')
   const modalToastTimeoutRef = useRef(null)
+  const ratingCloseTimeoutRef = useRef(null)
   const modalPointerRef = useRef({ startX: 0, startY: 0, isDragging: false, directionLocked: null })
   const modalCardRef = useRef(null)
 
@@ -735,6 +766,10 @@ function App() {
       if (finalName) {
         setDisplayNameInput(finalName)
       }
+      if (data.description !== undefined) {
+        setDescriptionInput(data.description || '')
+        setUserDescription(data.description || '')
+      }
 
       if (nextUrl) {
         setGeneratedProfileUrl(nextUrl)
@@ -824,6 +859,45 @@ function App() {
     }
   }
 
+  const handleSaveDescription = async () => {
+    const trimmed = descriptionInput.slice(0, 140).trim()
+    const targetUserId = cookieUserId || currentUserId
+    const authId = supabaseUser?.id || ''
+
+    try {
+      setIsSavingDescription(true)
+      setUploadError('')
+
+      const response = await fetch('/api/profile', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          description: trimmed,
+          userId: targetUserId,
+          authUserId: authId,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to save description: status ${response.status}`)
+      }
+
+      const data = await response.json()
+      const finalDesc = data.description !== undefined ? data.description : trimmed
+      setDescriptionInput(finalDesc)
+      setUserDescription(finalDesc)
+      setSavedDescription(true)
+      setTimeout(() => setSavedDescription(false), 2000)
+    } catch (err) {
+      console.error('Failed to save description:', err)
+      setUploadError('Nu am putut salva descrierea.')
+    } finally {
+      setIsSavingDescription(false)
+    }
+  }
+
   useEffect(() => {
     if (!isSupabaseConfigured()) {
       setIsCheckingAuth(false)
@@ -887,6 +961,8 @@ function App() {
       setCookieUserId('')
       setCurrentUserId('')
       setUsername('')
+      setUserDescription('')
+      setDescriptionInput('')
       setBooks([])
       setUserCollections([])
       setIsExploreMode(true)
@@ -947,13 +1023,19 @@ function App() {
           setIsLoading(true)
         }
         setError('')
-        const { books: apiBooks, username: apiUsername } = await fetchBooksFromApi(apiUrl, controller.signal)
+        const { books: apiBooks, username: apiUsername, description: apiDescription } = await fetchBooksFromApi(apiUrl, controller.signal)
         loadedUserIdRef.current = resolvedUserId
         setBooks(apiBooks)
         if (apiUsername) {
           setUsername(apiUsername)
           if (!supabaseUserRef.current) {
             setDisplayNameInput((prev) => prev || apiUsername)
+          }
+        }
+        if (apiDescription !== undefined) {
+          setUserDescription(apiDescription)
+          if (!supabaseUserRef.current) {
+            setDescriptionInput((prev) => prev || apiDescription)
           }
         }
       } catch (loadError) {
@@ -993,7 +1075,6 @@ function App() {
 
   useEffect(() => {
     if (!requestedBookId) {
-      setSelectedBook(null)
       return
     }
 
@@ -1004,13 +1085,19 @@ function App() {
     const matchedBook = books.find((book) => String(book.bookId || book.id) === String(requestedBookId))
 
     if (matchedBook) {
-      setSelectedBook(matchedBook)
+      setSelectedBook((prev) => {
+        if (prev && String(prev.bookId || prev.id) === String(matchedBook.bookId || matchedBook.id)) {
+          return { ...prev, ...matchedBook }
+        }
+        return matchedBook
+      })
       setError('')
       return
     }
 
-    setSelectedBook(null)
-    setError('Cartea nu a fost găsită pe acest raft.')
+    if (!selectedBook) {
+      setError('Cartea nu a fost găsită pe acest raft.')
+    }
   }, [books, requestedBookId])
 
   useEffect(() => {
@@ -1088,28 +1175,39 @@ function App() {
     return 0
   }, [selectedBook, loggedInUserBook, isOwnProfile])
 
+  const prevRatingBookIdRef = useRef(null)
+
   useEffect(() => {
     if (!selectedBook) {
+      prevRatingBookIdRef.current = null
       setSavedShelf(false)
       setShelfDropdownOpen(false)
       setShowRatingPopup(false)
       return
     }
 
+    const currentBookId = String(selectedBook.bookId || selectedBook.id || '')
+    const isBookChanged = prevRatingBookIdRef.current !== currentBookId
+    prevRatingBookIdRef.current = currentBookId
+
     if (loggedInUserBook?.shelf) {
       setTargetShelf(loggedInUserBook.shelf)
       setSavedShelf(true)
-      if (loggedInUserBook.shelf === 'read') {
-        const rating = Number(loggedInUserBook.myRating) || 0
-        setShowRatingPopup(rating === 0)
-      } else {
-        setShowRatingPopup(false)
+      if (isBookChanged) {
+        if (loggedInUserBook.shelf === 'read') {
+          const rating = Number(loggedInUserBook.myRating) || 0
+          setShowRatingPopup(rating === 0)
+        } else {
+          setShowRatingPopup(false)
+        }
       }
     } else {
       const defaultShelf = SHELF_OPTIONS.some((s) => s.id === activeShelf) ? activeShelf : 'to-read'
       setTargetShelf(defaultShelf)
       setSavedShelf(false)
-      setShowRatingPopup(false)
+      if (isBookChanged) {
+        setShowRatingPopup(false)
+      }
     }
   }, [selectedBook, loggedInUserBook, activeShelf])
 
@@ -1282,6 +1380,9 @@ function App() {
   }
 
   const closeBookDetails = () => {
+    if (ratingCloseTimeoutRef.current) {
+      clearTimeout(ratingCloseTimeoutRef.current)
+    }
     setShowRatingPopup(false)
     setIsSavingRating(false)
 
@@ -1399,6 +1500,76 @@ function App() {
       setExploreCollections((prev) => prev.filter((c) => Number(c.id) !== Number(collection.id)))
     } catch (err) {
       console.error('Error deleting collection:', err)
+    }
+  }
+
+  const [togglingPrivacyCollectionId, setTogglingPrivacyCollectionId] = useState(null)
+
+  const handleToggleCollectionPrivacy = async (collection) => {
+    const activeUser = cookieUserId || getUserIdFromCookie()
+    if (!collection?.id || !activeUser || togglingPrivacyCollectionId) return
+
+    const collectionId = String(collection.id)
+    const currentPrivate = Boolean(collection.isPrivate)
+    const nextPrivate = !currentPrivate
+
+    setTogglingPrivacyCollectionId(collectionId)
+
+    // Optimistic update
+    setUserCollections((prev) =>
+      prev.map((c) =>
+        String(c.id) === collectionId ? { ...c, isPrivate: nextPrivate } : c,
+      ),
+    )
+    if (nextPrivate) {
+      // If made private, remove from explore collections immediately
+      setExploreCollections((prev) =>
+        prev.filter((c) => String(c.id) !== collectionId),
+      )
+    }
+
+    try {
+      const response = await fetch('/api/collections', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: activeUser,
+          collectionId,
+          isPrivate: nextPrivate,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to update collection privacy: status ${response.status}`)
+      }
+
+      const data = await response.json()
+      if (data?.collection) {
+        setUserCollections((prev) =>
+          prev.map((c) =>
+            String(c.id) === collectionId
+              ? { ...c, isPrivate: Boolean(data.collection.isPrivate) }
+              : c,
+          ),
+        )
+      }
+    } catch (err) {
+      console.error('Error toggling collection privacy:', err)
+      // Revert optimistic update
+      setUserCollections((prev) =>
+        prev.map((c) =>
+          String(c.id) === collectionId ? { ...c, isPrivate: currentPrivate } : c,
+        ),
+      )
+      if (nextPrivate) {
+        setExploreCollections((prev) => {
+          const exists = prev.some((c) => String(c.id) === collectionId)
+          if (exists) return prev
+          return [{ ...collection, isPrivate: false }, ...prev]
+        })
+      }
+    } finally {
+      setTogglingPrivacyCollectionId(null)
     }
   }
 
@@ -1644,6 +1815,14 @@ function App() {
 
     const previousRating = currentBookRating
 
+    // Close the rating panel after clicking stars, while keeping the whole book modal window open
+    if (ratingCloseTimeoutRef.current) {
+      clearTimeout(ratingCloseTimeoutRef.current)
+    }
+    ratingCloseTimeoutRef.current = setTimeout(() => {
+      setShowRatingPopup(false)
+    }, 250)
+
     // Optimistic update: update star rating immediately before receiving server confirmation
     setUserShelvesByBookId((prev) => ({
       ...prev,
@@ -1664,6 +1843,34 @@ function App() {
         String(b.bookId || b.id) === bookId ? { ...b, rating: newRating } : b
       )
     )
+
+    if (activeModalCollection) {
+      setActiveModalCollection((prev) => {
+        if (!prev || !Array.isArray(prev.books)) return prev
+        return {
+          ...prev,
+          books: prev.books.map((b) =>
+            String(b.bookId || b.id) === bookId ? { ...b, rating: newRating } : b
+          ),
+        }
+      })
+    }
+
+    const updateCollectionRating = (ratingVal) => (collections) =>
+      collections.map((c) => {
+        if (!c.books || !Array.isArray(c.books)) return c
+        const hasBook = c.books.some((b) => String(b.bookId || b.id) === bookId)
+        if (!hasBook) return c
+        return {
+          ...c,
+          books: c.books.map((b) =>
+            String(b.bookId || b.id) === bookId ? { ...b, rating: ratingVal } : b
+          ),
+        }
+      })
+
+    setUserCollections(updateCollectionRating(newRating))
+    setExploreCollections(updateCollectionRating(newRating))
 
     try {
       setIsSavingRating(true)
@@ -1912,7 +2119,7 @@ function App() {
   const handleModalPointerDown = (event) => {
     if (modalSwipeExit) return
     if (event.button !== 0 && event.pointerType === 'mouse') return
-    if (event.target.closest('button, select, input, a, .book-shelf-options-menu, .book-detail-qr-box, .book-detail-rating-section, .book-rating-popup')) return
+    if (event.target.closest('button, select, input, a, .book-shelf-options-menu, .book-detail-qr-box, .book-detail-rating-section, .book-rating-popup, .book-rating-popup-wrapper, [role="radiogroup"], [role="radio"]')) return
 
     modalPointerRef.current = {
       startX: event.clientX,
@@ -2064,6 +2271,7 @@ function App() {
         },
         body: JSON.stringify({
           displayName: trimmedName,
+          description: descriptionInput.slice(0, 140).trim(),
           csv: csvText,
           userId: existingCookieUserId || currentUserId,
           authUserId: supabaseUser?.id || null,
@@ -2220,6 +2428,9 @@ function App() {
         })
     } else if (userFallbackName && !displayNameInput) {
       setDisplayNameInput(userFallbackName)
+    }
+    if (userDescription && !descriptionInput) {
+      setDescriptionInput(userDescription)
     }
     setUploadError('')
     setShowProfileModal(true)
@@ -2584,7 +2795,13 @@ function App() {
         </header>
 
         {selectedBook ? (
-          <div className="book-detail-backdrop" onClick={closeBookDetails}>
+          <div
+            className="book-detail-backdrop"
+            onClick={(event) => {
+              if (event.target !== event.currentTarget) return
+              closeBookDetails()
+            }}
+          >
             <div
               ref={isSwipableModal ? modalCardRef : undefined}
               className={`book-detail-modal ${isSwipableModal
@@ -2682,45 +2899,60 @@ function App() {
                         </button>
                       ) : (
                         <>
-                          <div className={`book-shelf-dropdown-btn-group ${savedShelf ? 'saved' : ''}`}>
-                            <button
-                              type="button"
-                              className="book-shelf-main-btn"
-                              disabled={isSavingShelf}
-                              onClick={() => {
-                                if (savedShelf) {
-                                  handleRemoveBookFromShelf()
-                                } else {
-                                  handleSaveBookToShelf(targetShelf)
+                          <div className="book-detail-shelf-action-row">
+                            <div className={`book-shelf-dropdown-btn-group ${savedShelf ? 'saved' : ''}`}>
+                              <button
+                                type="button"
+                                className="book-shelf-main-btn"
+                                disabled={isSavingShelf}
+                                onClick={() => {
+                                  if (savedShelf) {
+                                    handleRemoveBookFromShelf()
+                                  } else {
+                                    handleSaveBookToShelf(targetShelf)
+                                  }
+                                }}
+                                title={
+                                  savedShelf
+                                    ? `Elimină de pe raft (${getShelfLabel(targetShelf)})`
+                                    : `Salvează pe raft: ${getShelfLabel(targetShelf)}`
                                 }
-                              }}
-                              title={
-                                savedShelf
-                                  ? `Elimină de pe raft (${getShelfLabel(targetShelf)})`
-                                  : `Salvează pe raft: ${getShelfLabel(targetShelf)}`
-                              }
-                            >
-                              {savedShelf ? <Check size={16} /> : <Bookmark size={16} />}
-                              <span>
-                                {isSavingShelf
-                                  ? (savedShelf ? 'Se elimină...' : 'Se salvează...')
-                                  : (savedShelf
-                                    ? `Salvat: ${getShelfLabel(targetShelf)}`
-                                    : `Salvează: ${getShelfLabel(targetShelf)}`)}
-                              </span>
-                            </button>
-                            <button
-                              type="button"
-                              className={`book-shelf-chevron-toggle-btn ${shelfDropdownOpen ? 'open' : ''}`}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setShelfDropdownOpen((prev) => !prev)
-                              }}
-                              aria-label="Alege raftul"
-                              title="Alege raftul"
-                            >
-                              <ChevronDown size={16} className={`chevron-icon ${shelfDropdownOpen ? 'open' : ''}`} />
-                            </button>
+                              >
+                                {savedShelf ? <Check size={16} /> : <Bookmark size={16} />}
+                                <span>
+                                  {isSavingShelf
+                                    ? (savedShelf ? 'Se elimină...' : 'Se salvează...')
+                                    : (savedShelf
+                                      ? `${getShelfLabel(targetShelf)}`
+                                      : `${getShelfLabel(targetShelf)}`)}
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                className={`book-shelf-chevron-toggle-btn ${shelfDropdownOpen ? 'open' : ''}`}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setShelfDropdownOpen((prev) => !prev)
+                                }}
+                                aria-label="Alege raftul"
+                                title="Alege raftul"
+                              >
+                                <ChevronDown size={16} className={`chevron-icon ${shelfDropdownOpen ? 'open' : ''}`} />
+                              </button>
+                            </div>
+
+                            {isOwnCollectionModal ? (
+                              <button
+                                type="button"
+                                className="book-collection-remove-btn"
+                                disabled={isRemovingFromCollection}
+                                onClick={handleRemoveBookFromActiveCollection}
+                                title={`Elimină din colecția „${activeModalCollection.title}”`}
+                                aria-label={`Elimină din colecția „${activeModalCollection.title}”`}
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            ) : null}
                           </div>
 
                           {shelfDropdownOpen && (
@@ -2751,8 +2983,9 @@ function App() {
                               {showRatingPopup ? (
                                 <div
                                   className="book-rating-popup-wrapper"
-                                  onPointerDown={(e) => e.stopPropagation()}
-                                  onClick={(e) => e.stopPropagation()}
+                                  onPointerDown={(event) => event.stopPropagation()}
+                                  onPointerUp={(event) => event.stopPropagation()}
+                                  onClick={(event) => event.stopPropagation()}
                                 >
                                   <div className="book-rating-popup">
                                     <div className="book-rating-popup-header">
@@ -2760,7 +2993,12 @@ function App() {
                                       <button
                                         type="button"
                                         className="book-rating-popup-close-btn"
-                                        onClick={() => setShowRatingPopup(false)}
+                                        onPointerDown={(event) => event.stopPropagation()}
+                                        onPointerUp={(event) => event.stopPropagation()}
+                                        onClick={(event) => {
+                                          event.stopPropagation()
+                                          setShowRatingPopup(false)
+                                        }}
                                         aria-label="Închide"
                                         title="Închide"
                                       >
@@ -2768,7 +3006,12 @@ function App() {
                                       </button>
                                     </div>
 
-                                    <div className="book-rating-stars-row">
+                                    <div
+                                      className="book-rating-stars-row"
+                                      onPointerDown={(event) => event.stopPropagation()}
+                                      onPointerUp={(event) => event.stopPropagation()}
+                                      onClick={(event) => event.stopPropagation()}
+                                    >
                                       <PeekRating
                                         value={currentBookRating}
                                         defaultValue={currentBookRating || 0}
@@ -2796,8 +3039,12 @@ function App() {
                                 <button
                                   type="button"
                                   className="book-rate-trigger-btn"
-                                  onPointerDown={(e) => e.stopPropagation()}
-                                  onClick={() => setShowRatingPopup(true)}
+                                  onPointerDown={(event) => event.stopPropagation()}
+                                  onPointerUp={(event) => event.stopPropagation()}
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    setShowRatingPopup(true)
+                                  }}
                                   title="Evaluează cartea"
                                 >
                                   <Star size={14} className={currentBookRating > 0 ? 'star-lit' : ''} />
@@ -2813,21 +3060,6 @@ function App() {
                         </>
                       )}
                     </div>
-
-                    {isOwnCollectionModal ? (
-                      <button
-                        type="button"
-                        className="book-collection-remove-btn"
-                        disabled={isRemovingFromCollection}
-                        onClick={handleRemoveBookFromActiveCollection}
-                        title={`Elimină din colecția „${activeModalCollection.title}”`}
-                      >
-                        <Trash2 size={14} />
-                        <span>
-                          {isRemovingFromCollection ? 'Se elimină...' : 'Elimină din colecție'}
-                        </span>
-                      </button>
-                    ) : null}
                   </div>
 
                   <div className="book-detail-meta-col">
@@ -2971,6 +3203,47 @@ function App() {
                             title={savedName ? 'Salvat!' : 'Salvează numele'}
                           >
                             {savedName ? <Check size={16} /> : <Save size={16} />}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="profile-modal-field">
+                        <div className="profile-field-header-row">
+                          <label htmlFor="profile-description-input" className="profile-modal-label">
+                            Descriere
+                          </label>
+                          <span className="profile-char-counter">
+                            {descriptionInput.length}/140
+                          </span>
+                        </div>
+                        <div className="profile-name-input-wrapper">
+                          <input
+                            id="profile-description-input"
+                            type="text"
+                            maxLength={140}
+                            value={descriptionInput}
+                            onChange={(event) => {
+                              setDescriptionInput(event.target.value)
+                              setUploadError('')
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                handleSaveDescription()
+                              }
+                            }}
+                            placeholder="ex: Pasionat de cărți SF și literatură clasică"
+                            className="profile-modal-input profile-modal-input-with-action"
+                          />
+                          <button
+                            type="button"
+                            className={`profile-name-save-icon-btn ${savedDescription ? 'saved' : ''}`}
+                            onClick={handleSaveDescription}
+                            disabled={isSavingDescription}
+                            aria-label="Salvează descrierea"
+                            title={savedDescription ? 'Salvat!' : 'Salvează descrierea'}
+                          >
+                            {savedDescription ? <Check size={16} /> : <Save size={16} />}
                           </button>
                         </div>
                       </div>
@@ -3126,6 +3399,8 @@ function App() {
                         onSelectCreator={handleSelectExploreCreator}
                         onAddBookClick={handleOpenAddBookForCollection}
                         onDeleteCollection={handleDeleteCollection}
+                        onTogglePrivacy={handleToggleCollectionPrivacy}
+                        isTogglingPrivacy={togglingPrivacyCollectionId === String(collection.id)}
                         onBookClick={handleOpenCollectionBook}
                       />
                     )
@@ -3223,7 +3498,6 @@ function App() {
               ) : (
                 <div className="books-carousel" ref={carouselRef}>
                   {visibleBooks.map((book, index) => {
-                    const safeCoverUrl = book.imageUrl || ''
 
                     return (
                       <article key={book.id} className="book-card">

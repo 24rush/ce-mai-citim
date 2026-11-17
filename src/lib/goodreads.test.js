@@ -37,6 +37,7 @@ import collectionsHandler, {
   addBookToCollection,
   removeBookFromCollection,
   deleteCollection,
+  updateCollectionPrivacy,
   getUserCollections,
   getExploreCollections,
 } from '../../api/collections.js'
@@ -936,7 +937,7 @@ test('profile endpoint generates new profile url for new login user id and assoc
     if (sql.includes('ALTER TABLE') || sql.includes('CREATE UNIQUE INDEX')) {
       return []
     }
-    if (sql.includes('SELECT user_id, display_name, auth_user_id FROM users WHERE auth_user_id = $1')) {
+    if (sql.includes('FROM users WHERE auth_user_id = $1')) {
       const match = usersDb.find((u) => u.auth_user_id === values[0])
       return match ? [match] : []
     }
@@ -989,7 +990,7 @@ test('profile endpoint returns existing profile url when same auth user id logs 
     if (sql.includes('ALTER TABLE') || sql.includes('CREATE UNIQUE INDEX')) {
       return []
     }
-    if (sql.includes('SELECT user_id, display_name, auth_user_id FROM users WHERE auth_user_id = $1')) {
+    if (sql.includes('FROM users WHERE auth_user_id = $1')) {
       const match = usersDb.find((u) => u.auth_user_id === values[0])
       return match ? [match] : []
     }
@@ -1032,11 +1033,11 @@ test('profile endpoint claims unassociated existing user id when user logs in', 
     if (sql.includes('ALTER TABLE') || sql.includes('CREATE UNIQUE INDEX')) {
       return []
     }
-    if (sql.includes('SELECT user_id, display_name, auth_user_id FROM users WHERE auth_user_id = $1')) {
+    if (sql.includes('FROM users WHERE auth_user_id = $1')) {
       const match = usersDb.find((u) => u.auth_user_id === values[0])
       return match ? [match] : []
     }
-    if (sql.includes('SELECT user_id, auth_user_id, display_name FROM users WHERE user_id = $1')) {
+    if (sql.includes('FROM users WHERE user_id = $1')) {
       const match = usersDb.find((u) => u.user_id === values[0])
       return match ? [match] : []
     }
@@ -1090,7 +1091,7 @@ test('profile endpoint defaults initial display name to email prefix without dom
     if (sql.includes('ALTER TABLE') || sql.includes('CREATE UNIQUE INDEX')) {
       return []
     }
-    if (sql.includes('SELECT user_id, display_name, auth_user_id FROM users WHERE auth_user_id = $1')) {
+    if (sql.includes('FROM users WHERE auth_user_id = $1')) {
       return []
     }
     if (sql.includes('INSERT INTO users')) {
@@ -1162,6 +1163,48 @@ test('profile endpoint updates display name on PATCH', async () => {
   assert.equal(res.payload.success, true)
   assert.equal(res.payload.displayName, 'New Awesome Name')
   assert.equal(usersDb[0].display_name, 'New Awesome Name')
+})
+
+test('profile endpoint updates description on PATCH', async () => {
+  const usersDb = [
+    {
+      user_id: 'user1234',
+      display_name: 'Alin',
+      description: 'Old Description',
+      auth_user_id: 'supa-uuid-5',
+    },
+  ]
+
+  const mockDbQuery = async (sql, values = []) => {
+    if (sql.includes('ALTER TABLE') || sql.includes('CREATE UNIQUE INDEX')) {
+      return []
+    }
+    if (sql.includes('UPDATE users')) {
+      const target = usersDb.find((u) => u.user_id === values[1] || u.auth_user_id === values[2])
+      if (target) {
+        target.description = values[0]
+      }
+      return []
+    }
+    return []
+  }
+
+  const req = {
+    method: 'PATCH',
+    body: {
+      userId: 'user1234',
+      description: 'Pasionat de SF și literatură clasică',
+    },
+    dbQuery: mockDbQuery,
+  }
+  const res = createMockRes()
+
+  await profileHandler(req, res)
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.payload.success, true)
+  assert.equal(res.payload.description, 'Pasionat de SF și literatură clasică')
+  assert.equal(usersDb[0].description, 'Pasionat de SF și literatură clasică')
 })
 
 test('shelves endpoint validates input parameters', async () => {
@@ -2531,6 +2574,116 @@ test('collections endpoint creates collections, adds books, lists user & explore
   assert.equal(removeBookRes.statusCode, 200)
   assert.equal(removeBookRes.payload.removed, true)
 })
+
+test('collections endpoint toggles collection privacy between private and public', async () => {
+  let isPrivateState = false
+  const mockQuery = async (sqlText, values) => {
+    if (sqlText.includes('UPDATE collections')) {
+      isPrivateState = Boolean(values[0])
+      return [
+        {
+          collection_id: values[1],
+          user_id: values[2],
+          title: 'Top SF',
+          description: 'Sci-fi collection',
+          is_private: isPrivateState,
+          created_at: '2026-11-14T20:00:00Z',
+          updated_at: '2026-11-17T09:00:00Z',
+        },
+      ]
+    }
+    return []
+  }
+
+  // 1. Toggle to private via PATCH
+  const patchRes = createMockRes()
+  await collectionsHandler(
+    {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        userId: 'abcd1234',
+        collectionId: '101',
+        isPrivate: true,
+      },
+      dbQuery: mockQuery,
+    },
+    patchRes,
+  )
+  assert.equal(patchRes.statusCode, 200)
+  assert.equal(patchRes.payload.success, true)
+  assert.equal(patchRes.payload.isPrivate, true)
+  assert.equal(patchRes.payload.collection.isPrivate, true)
+
+  // 2. Toggle back to public via PATCH
+  const patchResPublic = createMockRes()
+  await collectionsHandler(
+    {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        userId: 'abcd1234',
+        collectionId: '101',
+        isPrivate: false,
+      },
+      dbQuery: mockQuery,
+    },
+    patchResPublic,
+  )
+  assert.equal(patchResPublic.statusCode, 200)
+  assert.equal(patchResPublic.payload.success, true)
+  assert.equal(patchResPublic.payload.isPrivate, false)
+  assert.equal(patchResPublic.payload.collection.isPrivate, false)
+
+  // 3. Toggle via POST action: 'update_privacy'
+  const postRes = createMockRes()
+  await collectionsHandler(
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        action: 'update_privacy',
+        userId: 'abcd1234',
+        collectionId: '101',
+        isPrivate: true,
+      },
+      dbQuery: mockQuery,
+    },
+    postRes,
+  )
+  assert.equal(postRes.statusCode, 200)
+  assert.equal(postRes.payload.success, true)
+  assert.equal(postRes.payload.isPrivate, true)
+
+  // 4. Unauthorized / not found error handling
+  const unauthorizedRes = createMockRes()
+  await collectionsHandler(
+    {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        userId: 'hack9999',
+        collectionId: '101',
+        isPrivate: false,
+      },
+      dbQuery: async () => [],
+    },
+    unauthorizedRes,
+  )
+  assert.equal(unauthorizedRes.statusCode, 400)
+  assert.match(unauthorizedRes.payload.error, /unauthorized|not found/i)
+
+  // 5. Direct call to updateCollectionPrivacy
+  const directResult = await updateCollectionPrivacy({
+    userId: 'abcd1234',
+    collectionId: '101',
+    isPrivate: true,
+    queryFn: mockQuery,
+  })
+  assert.equal(directResult.success, true)
+  assert.equal(directResult.isPrivate, true)
+})
+
 
 
 

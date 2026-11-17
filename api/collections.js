@@ -422,9 +422,60 @@ export const deleteCollection = async ({ userId, collectionId, queryFn }) => {
   }
 }
 
+export const updateCollectionPrivacy = async ({
+  userId,
+  collectionId,
+  isPrivate,
+  queryFn,
+}) => {
+  const cleanUserId = String(userId || '').trim()
+  if (!cleanUserId || !/^[a-zA-Z0-9]{8}$/.test(cleanUserId)) {
+    throw new Error('A valid 8-character user id is required.')
+  }
+
+  const cleanCollectionId = String(collectionId || '').trim()
+  if (!cleanCollectionId) {
+    throw new Error('Collection id is required.')
+  }
+
+  const privateFlag = Boolean(isPrivate)
+  const executeQuery = queryFn || (await createDefaultDbQuery())
+  const sql = `
+    UPDATE collections
+    SET is_private = $1, updated_at = NOW()
+    WHERE collection_id = $2 AND user_id = $3
+    RETURNING collection_id, user_id, title, description, is_private, created_at, updated_at;
+  `.trim()
+
+  const rows = await withAutoMigrate(executeQuery, () =>
+    executeQuery(sql, [privateFlag, cleanCollectionId, cleanUserId]),
+  )
+
+  if (!rows || rows.length === 0) {
+    throw new Error('Collection not found or unauthorized.')
+  }
+
+  const row = rows[0]
+  return {
+    success: true,
+    collectionId: String(row.collection_id),
+    isPrivate: Boolean(row.is_private),
+    collection: {
+      id: String(row.collection_id),
+      collectionId: String(row.collection_id),
+      userId: row.user_id,
+      title: row.title,
+      description: row.description || '',
+      isPrivate: Boolean(row.is_private),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    },
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
-    res.setHeader('Allow', 'GET, POST, DELETE, OPTIONS')
+    res.setHeader('Allow', 'GET, POST, PATCH, DELETE, OPTIONS')
     return res.status(200).end()
   }
 
@@ -469,6 +520,17 @@ export default async function handler(req, res) {
     try {
       const executeQuery = req.dbQuery || (await createDefaultDbQuery())
 
+      if (action === 'update_privacy' || action === 'update-privacy' || action === 'toggle_privacy') {
+        const result = await updateCollectionPrivacy({
+          userId: body.userId,
+          collectionId: body.collectionId,
+          isPrivate: body.isPrivate,
+          queryFn: executeQuery,
+        })
+        res.setHeader('Cache-Control', 'no-store')
+        return res.status(200).json(result)
+      }
+
       if (action === 'add-book') {
         const result = await addBookToCollection({
           userId: body.userId,
@@ -499,6 +561,39 @@ export default async function handler(req, res) {
         err?.message?.includes('not found')
       return res.status(isClientError ? 400 : 500).json({
         error: err?.message || 'Failed to save collection.',
+      })
+    }
+  }
+
+  if (req.method === 'PATCH') {
+    let body = req.body || {}
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body)
+      } catch {
+        body = {}
+      }
+    }
+
+    try {
+      const executeQuery = req.dbQuery || (await createDefaultDbQuery())
+      const result = await updateCollectionPrivacy({
+        userId: body.userId,
+        collectionId: body.collectionId,
+        isPrivate: body.isPrivate,
+        queryFn: executeQuery,
+      })
+      res.setHeader('Cache-Control', 'no-store')
+      return res.status(200).json(result)
+    } catch (err) {
+      console.error('Failed to update collection privacy:', err)
+      const isClientError =
+        err?.message?.includes('required') ||
+        err?.message?.includes('8-character') ||
+        err?.message?.includes('unauthorized') ||
+        err?.message?.includes('not found')
+      return res.status(isClientError ? 400 : 500).json({
+        error: err?.message || 'Failed to update collection privacy.',
       })
     }
   }
@@ -547,7 +642,7 @@ export default async function handler(req, res) {
     }
   }
 
-  res.setHeader('Allow', 'GET, POST, DELETE, OPTIONS')
+  res.setHeader('Allow', 'GET, POST, PATCH, DELETE, OPTIONS')
   return res.status(405).json({ error: 'Method Not Allowed' })
 }
 

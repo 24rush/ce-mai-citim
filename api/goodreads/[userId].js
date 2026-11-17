@@ -6,6 +6,7 @@ export const buildDefaultCoverUrl = () => ''
 export const USER_BOOKS_SQL = `
   SELECT
     u.display_name,
+    COALESCE(u.description, '') AS user_description,
     b.book_id,
     b.title,
     b.author,
@@ -75,12 +76,13 @@ export default async function handler(req, res) {
     }
 
     const username = rows[0].display_name || ''
+    const description = rows[0].user_description || ''
     const books = rows
       .filter((row) => row.book_id)
       .map(mapRowToBook)
 
     res.setHeader('Cache-Control', 'no-store')
-    return res.status(200).json({ userId, username, books })
+    return res.status(200).json({ userId, username, description, books })
   } catch (error) {
     console.error('Failed to load books for user:', userId, error)
     return res.status(500).json({ error: error?.message || 'Failed to load books.' })
