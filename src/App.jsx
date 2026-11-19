@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
-import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FolderPlus, Globe, Library, Loader2, Lock, LogOut, Plus, Save, Search, Share2, Star, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
+import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FolderPlus, Globe, Library, Loader2, Lock, LogOut, Plus, QrCode, Save, Search, Share2, Star, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
 import PeekRating from './components/PeekRating'
 import {
   buildBookShareUrl,
@@ -542,6 +542,7 @@ function App() {
   const [copiedUrl, setCopiedUrl] = useState(false)
   const [sharedUrl, setSharedUrl] = useState(false)
   const [bookQrCodeDataUrl, setBookQrCodeDataUrl] = useState('')
+  const [showBookQrModal, setShowBookQrModal] = useState(false)
   const [requestedBookId, setRequestedBookId] = useState(() => initialRouteState.bookId || '')
   const [selectedBook, setSelectedBook] = useState(null)
   const [targetShelf, setTargetShelf] = useState('to-read')
@@ -575,6 +576,7 @@ function App() {
   const [isRemovingFromCollection, setIsRemovingFromCollection] = useState(false)
   const [collectionsRefreshTrigger, setCollectionsRefreshTrigger] = useState(0)
   const shelfDropdownRef = useRef(null)
+  const enrichingBookIdsRef = useRef(new Set())
   const [userShelvesByBookId, setUserShelvesByBookId] = useState({})
   const [isLoading, setIsLoading] = useState(true)
   const [booksFetchTrigger, setBooksFetchTrigger] = useState(0)
@@ -1101,15 +1103,87 @@ function App() {
   }, [books, requestedBookId])
 
   useEffect(() => {
-    if (!selectedBook?.link) {
+    if (!selectedBook) {
       setBookQrCodeDataUrl('')
       return
     }
 
-    QRCode.toDataURL(selectedBook.link)
+    const userIdToUse = currentUserId || cookieUserId
+    const bookId = String(selectedBook.bookId || selectedBook.id || '')
+    const qrUrl = userIdToUse && bookId
+      ? buildBookShareUrl(userIdToUse, activeShelf, bookId, window.location.origin)
+      : (selectedBook.link || window.location.href)
+
+    if (!qrUrl) {
+      setBookQrCodeDataUrl('')
+      return
+    }
+
+    QRCode.toDataURL(qrUrl, { width: 320, margin: 2 })
       .then((dataUrl) => setBookQrCodeDataUrl(dataUrl))
       .catch(() => setBookQrCodeDataUrl(''))
-  }, [selectedBook?.link])
+  }, [selectedBook, currentUserId, cookieUserId, activeShelf])
+
+  useEffect(() => {
+    if (!selectedBook) return
+    const bookId = String(selectedBook.bookId || selectedBook.id || '')
+    if (!bookId) return
+
+    if (!enrichingBookIdsRef.current.has(bookId)) {
+      enrichingBookIdsRef.current.add(bookId)
+      const userIdToUse = currentUserId || cookieUserId || ''
+
+      fetch('/api/isbn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: selectedBook.title,
+          author: selectedBook.author,
+          isbn: selectedBook.isbn,
+          bookId,
+          userId: userIdToUse,
+        }),
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (!data) return
+          setSelectedBook((prev) => {
+            if (!prev) return prev
+            const curId = String(prev.bookId || prev.id || '')
+            if (curId === bookId) {
+              return {
+                ...prev,
+                description: data.description || prev.description,
+                pages: prev.pages || data.pageCount,
+                publishedYear: prev.publishedYear || data.publishedYear,
+                mainCategory: prev.mainCategory || data.mainCategory,
+                imageUrl: prev.imageUrl || data.coverUrl || data.imageUrl,
+              }
+            }
+            return prev
+          })
+
+          setBooks((prevBooks) =>
+            prevBooks.map((b) => {
+              if (String(b.bookId || b.id) === bookId) {
+                return {
+                  ...b,
+                  description: data.description || b.description,
+                  pages: b.pages || data.pageCount,
+                  publishedYear: b.publishedYear || data.publishedYear,
+                  mainCategory: data.mainCategory || b.mainCategory,
+                  imageUrl: b.imageUrl || data.coverUrl || data.imageUrl,
+                }
+              }
+              return b
+            }),
+          )
+        })
+        .catch(() => {
+          // On-demand enrichment is best effort
+        })
+    }
+  }, [selectedBook?.bookId, selectedBook?.id, currentUserId, cookieUserId])
 
   useEffect(() => {
     if (!shelfDropdownOpen) return
@@ -1384,6 +1458,7 @@ function App() {
       clearTimeout(ratingCloseTimeoutRef.current)
     }
     setShowRatingPopup(false)
+    setShowBookQrModal(false)
     setIsSavingRating(false)
 
     if (openedFromSearch) {
@@ -1824,6 +1899,8 @@ function App() {
     }, 250)
 
     // Optimistic update: update star rating immediately before receiving server confirmation
+    setTargetShelf('read')
+    setSavedShelf(true)
     setUserShelvesByBookId((prev) => ({
       ...prev,
       [bookId]: {
@@ -2119,7 +2196,7 @@ function App() {
   const handleModalPointerDown = (event) => {
     if (modalSwipeExit) return
     if (event.button !== 0 && event.pointerType === 'mouse') return
-    if (event.target.closest('button, select, input, a, .book-shelf-options-menu, .book-detail-qr-box, .book-detail-rating-section, .book-rating-popup, .book-rating-popup-wrapper, [role="radiogroup"], [role="radio"]')) return
+    if (event.target.closest('button, select, input, a, .book-shelf-options-menu, .book-detail-qr-box, .book-detail-actions-row, .book-detail-rating-section, .book-rating-popup, .book-rating-popup-wrapper, .qr-modal-overlay, .qr-modal-card, [role="radiogroup"], [role="radio"]')) return
 
     modalPointerRef.current = {
       startX: event.clientX,
@@ -2182,10 +2259,14 @@ function App() {
   }
 
   useEffect(() => {
-    if (!selectedBook && !isSearchModalOpen && !showNewCollectionInput) return undefined
+    if (!selectedBook && !isSearchModalOpen && !showNewCollectionInput && !showBookQrModal) return undefined
 
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
+        if (showBookQrModal) {
+          setShowBookQrModal(false)
+          return
+        }
         if (selectedBook) {
           closeBookDetails()
         } else if (isSearchModalOpen) {
@@ -2244,16 +2325,12 @@ function App() {
   const handleUploadCsvSubmit = async (event) => {
     event.preventDefault()
 
-    const trimmedName = displayNameInput.trim()
-    if (!trimmedName) {
-      setUploadError('Introdu numele care va fi afișat.')
-      return
-    }
-
     if (!csvFile) {
       setUploadError('Selectează fișierul CSV exportat din Goodreads.')
       return
     }
+
+    const trimmedName = displayNameInput.trim()
 
     try {
       setIsUploadingCsv(true)
@@ -2270,7 +2347,7 @@ function App() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          displayName: trimmedName,
+          displayName: trimmedName || undefined,
           description: descriptionInput.slice(0, 140).trim(),
           csv: csvText,
           userId: existingCookieUserId || currentUserId,
@@ -2721,9 +2798,9 @@ function App() {
               thumbColor="#8b5cf6"
               textColor="#f4f4f5"
               activeTextColor="#ffffff"
-              size="md"
+              size="lg"
               radius={12}
-              inset={2}
+              inset={5}
               equalSlots
               stretch={100}
               squash={3}
@@ -2799,12 +2876,16 @@ function App() {
             className="book-detail-backdrop"
             onClick={(event) => {
               if (event.target !== event.currentTarget) return
+              if (showBookQrModal) {
+                setShowBookQrModal(false)
+                return
+              }
               closeBookDetails()
             }}
           >
             <div
               ref={isSwipableModal ? modalCardRef : undefined}
-              className={`book-detail-modal ${isSwipableModal
+              className={`book-detail-modal ${showBookQrModal ? 'qr-modal-open' : ''} ${isSwipableModal
                 ? `swipable ${modalPointerRef.current?.isDragging ? 'is-dragging' : ''} ${modalSwipeExit ? `modal-fly-out-${modalSwipeExit}` : ''
                 }`
                 : ''
@@ -2827,6 +2908,28 @@ function App() {
               onPointerCancel={isSwipableModal ? handleModalPointerUp : undefined}
               onClick={(event) => event.stopPropagation()}
             >
+              {/* In-Modal Non-Fullscreen QR Code Overlay */}
+              {showBookQrModal && bookQrCodeDataUrl ? (
+                <div
+                  className="qr-modal-overlay"
+                  onClick={() => setShowBookQrModal(false)}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Cod QR"
+                >
+                  <div
+                    className="qr-modal-card"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <img
+                      src={bookQrCodeDataUrl}
+                      alt={`Cod QR ${selectedBook?.title || ''}`}
+                      className="qr-modal-image"
+                    />
+                  </div>
+                </div>
+              ) : null}
+
               {/* Swipe Left & Right Overlay Stamps (Other user's books or collections) */}
               {isSwipableModal && (
                 <>
@@ -2883,183 +2986,6 @@ function App() {
                         <div className="book-cover-placeholder" aria-hidden="true" />
                       )}
                     </div>
-
-                    <div className="book-detail-shelf-action" ref={shelfDropdownRef}>
-                      {!supabaseUser ? (
-                        <button
-                          type="button"
-                          className="book-shelf-login-prompt-btn"
-                          onClick={() => {
-                            closeBookDetails()
-                            setShowProfileModal(true)
-                          }}
-                        >
-                          <Bookmark size={15} />
-                          <span>Login to save</span>
-                        </button>
-                      ) : (
-                        <>
-                          <div className="book-detail-shelf-action-row">
-                            <div className={`book-shelf-dropdown-btn-group ${savedShelf ? 'saved' : ''}`}>
-                              <button
-                                type="button"
-                                className="book-shelf-main-btn"
-                                disabled={isSavingShelf}
-                                onClick={() => {
-                                  if (savedShelf) {
-                                    handleRemoveBookFromShelf()
-                                  } else {
-                                    handleSaveBookToShelf(targetShelf)
-                                  }
-                                }}
-                                title={
-                                  savedShelf
-                                    ? `Elimină de pe raft (${getShelfLabel(targetShelf)})`
-                                    : `Salvează pe raft: ${getShelfLabel(targetShelf)}`
-                                }
-                              >
-                                {savedShelf ? <Check size={16} /> : <Bookmark size={16} />}
-                                <span>
-                                  {isSavingShelf
-                                    ? (savedShelf ? 'Se elimină...' : 'Se salvează...')
-                                    : (savedShelf
-                                      ? `${getShelfLabel(targetShelf)}`
-                                      : `${getShelfLabel(targetShelf)}`)}
-                                </span>
-                              </button>
-                              <button
-                                type="button"
-                                className={`book-shelf-chevron-toggle-btn ${shelfDropdownOpen ? 'open' : ''}`}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setShelfDropdownOpen((prev) => !prev)
-                                }}
-                                aria-label="Alege raftul"
-                                title="Alege raftul"
-                              >
-                                <ChevronDown size={16} className={`chevron-icon ${shelfDropdownOpen ? 'open' : ''}`} />
-                              </button>
-                            </div>
-
-                            {isOwnCollectionModal ? (
-                              <button
-                                type="button"
-                                className="book-collection-remove-btn"
-                                disabled={isRemovingFromCollection}
-                                onClick={handleRemoveBookFromActiveCollection}
-                                title={`Elimină din colecția „${activeModalCollection.title}”`}
-                                aria-label={`Elimină din colecția „${activeModalCollection.title}”`}
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            ) : null}
-                          </div>
-
-                          {shelfDropdownOpen && (
-                            <div className="book-shelf-options-menu" onClick={(e) => e.stopPropagation()}>
-                              {SHELF_OPTIONS.map((shelf) => (
-                                <button
-                                  key={shelf.id}
-                                  type="button"
-                                  className={`book-shelf-option-item ${targetShelf === shelf.id && savedShelf ? 'active' : ''}`}
-                                  onClick={() => {
-                                    setShelfDropdownOpen(false)
-                                    if (savedShelf && targetShelf === shelf.id) {
-                                      handleRemoveBookFromShelf()
-                                    } else {
-                                      setTargetShelf(shelf.id)
-                                      handleSaveBookToShelf(shelf.id)
-                                    }
-                                  }}
-                                >
-                                  <span>{shelf.label}</span>
-                                  {targetShelf === shelf.id && savedShelf && <Check size={14} />}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                          {savedShelf && targetShelf === 'read' && (
-                            <div className="book-detail-rating-section">
-                              {showRatingPopup ? (
-                                <div
-                                  className="book-rating-popup-wrapper"
-                                  onPointerDown={(event) => event.stopPropagation()}
-                                  onPointerUp={(event) => event.stopPropagation()}
-                                  onClick={(event) => event.stopPropagation()}
-                                >
-                                  <div className="book-rating-popup">
-                                    <div className="book-rating-popup-header">
-                                      <span className="book-rating-popup-title">Câte steluțe îi dai?</span>
-                                      <button
-                                        type="button"
-                                        className="book-rating-popup-close-btn"
-                                        onPointerDown={(event) => event.stopPropagation()}
-                                        onPointerUp={(event) => event.stopPropagation()}
-                                        onClick={(event) => {
-                                          event.stopPropagation()
-                                          setShowRatingPopup(false)
-                                        }}
-                                        aria-label="Închide"
-                                        title="Închide"
-                                      >
-                                        <X size={14} />
-                                      </button>
-                                    </div>
-
-                                    <div
-                                      className="book-rating-stars-row"
-                                      onPointerDown={(event) => event.stopPropagation()}
-                                      onPointerUp={(event) => event.stopPropagation()}
-                                      onClick={(event) => event.stopPropagation()}
-                                    >
-                                      <PeekRating
-                                        value={currentBookRating}
-                                        defaultValue={currentBookRating || 0}
-                                        count={5}
-                                        shape="star"
-                                        labels={['1 - Slabă', '2 - Acceptabilă', '3 - Bună', '4 - Foarte bună', '5 - Excelentă']}
-                                        activeColor="#f5b400"
-                                        idleColor="#52525b"
-                                        tipColor="#1e293b"
-                                        tipTextColor="#f8fafc"
-                                        size={20}
-                                        gap={2}
-                                        lift={4}
-                                        magnify={1.12}
-                                        riseDuration={200}
-                                        popScale={1.35}
-                                        showTip={false}
-                                        allowClear
-                                        onChange={handleRateBook}
-                                      />
-                                    </div>
-                                  </div>
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="book-rate-trigger-btn"
-                                  onPointerDown={(event) => event.stopPropagation()}
-                                  onPointerUp={(event) => event.stopPropagation()}
-                                  onClick={(event) => {
-                                    event.stopPropagation()
-                                    setShowRatingPopup(true)
-                                  }}
-                                  title="Evaluează cartea"
-                                >
-                                  <Star size={14} className={currentBookRating > 0 ? 'star-lit' : ''} />
-                                  <span>
-                                    {currentBookRating > 0
-                                      ? `Evaluarea ta: ${currentBookRating}/5`
-                                      : 'Câte steluțe îi dai?'}
-                                  </span>
-                                </button>
-                              )}
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
                   </div>
 
                   <div className="book-detail-meta-col">
@@ -3073,13 +2999,26 @@ function App() {
                         <strong>{selectedBook.publishedYear || 'N/A'}</strong>
                       </div>
                     </div>
-                    <div className="book-detail-qr-box">
+
+                    <div className="book-detail-actions-row">
                       {bookQrCodeDataUrl ? (
-                        <img src={bookQrCodeDataUrl} alt={`QR code for ${selectedBook.title}`} className="book-detail-qr-image" />
+                        <button
+                          type="button"
+                          className="book-detail-action-button"
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setShowBookQrModal(true)
+                          }}
+                          aria-label="Afișează codul QR"
+                          title="Cod QR"
+                        >
+                          <QrCode size={18} />
+                        </button>
                       ) : null}
                       <button
                         type="button"
-                        className="book-detail-share-button"
+                        className="book-detail-action-button"
                         onPointerDown={(event) => event.stopPropagation()}
                         onClick={(event) => {
                           event.stopPropagation()
@@ -3090,6 +3029,141 @@ function App() {
                       >
                         {copiedUrl ? <Check size={18} /> : <Share2 size={18} />}
                       </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Row 1 across both columns: Shelf action */}
+                <div className="book-detail-shelf-action" ref={shelfDropdownRef}>
+                  {!supabaseUser ? (
+                    <button
+                      type="button"
+                      className="book-shelf-login-prompt-btn"
+                      onClick={() => {
+                        closeBookDetails()
+                        setShowProfileModal(true)
+                      }}
+                    >
+                      <Bookmark size={15} />
+                      <span>Login to save</span>
+                    </button>
+                  ) : (
+                    <div className="book-detail-shelf-action-row">
+                      <div className="book-shelf-dropdown-wrapper">
+                        <div className={`book-shelf-dropdown-btn-group ${savedShelf ? 'saved' : ''}`}>
+                          <button
+                            type="button"
+                            className="book-shelf-main-btn"
+                            disabled={isSavingShelf}
+                            onClick={() => {
+                              if (savedShelf) {
+                                handleRemoveBookFromShelf()
+                              } else {
+                                handleSaveBookToShelf(targetShelf)
+                              }
+                            }}
+                            title={
+                              savedShelf
+                                ? `Elimină de pe raft (${getShelfLabel(targetShelf)})`
+                                : `Salvează pe raft: ${getShelfLabel(targetShelf)}`
+                            }
+                          >
+                            {savedShelf ? <Check size={16} /> : <Bookmark size={16} />}
+                            <span>
+                              {isSavingShelf
+                                ? (savedShelf ? 'Se elimină...' : 'Se salvează...')
+                                : `${getShelfLabel(targetShelf)}`}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className={`book-shelf-chevron-toggle-btn ${shelfDropdownOpen ? 'open' : ''}`}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setShelfDropdownOpen((prev) => !prev)
+                            }}
+                            aria-label="Alege raftul"
+                            title="Alege raftul"
+                          >
+                            <ChevronDown size={16} className={`chevron-icon ${shelfDropdownOpen ? 'open' : ''}`} />
+                          </button>
+                        </div>
+
+                        {shelfDropdownOpen && (
+                          <div className="book-shelf-options-menu" onClick={(e) => e.stopPropagation()}>
+                            {SHELF_OPTIONS.map((shelf) => (
+                              <button
+                                key={shelf.id}
+                                type="button"
+                                className={`book-shelf-option-item ${targetShelf === shelf.id && savedShelf ? 'active' : ''}`}
+                                onClick={() => {
+                                  setShelfDropdownOpen(false)
+                                  if (savedShelf && targetShelf === shelf.id) {
+                                    handleRemoveBookFromShelf()
+                                  } else {
+                                    setTargetShelf(shelf.id)
+                                    handleSaveBookToShelf(shelf.id)
+                                  }
+                                }}
+                              >
+                                <span>{shelf.label}</span>
+                                {targetShelf === shelf.id && savedShelf && <Check size={14} />}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {isOwnCollectionModal ? (
+                        <button
+                          type="button"
+                          className="book-collection-remove-btn"
+                          disabled={isRemovingFromCollection}
+                          onClick={handleRemoveBookFromActiveCollection}
+                          title={`Elimină din colecția „${activeModalCollection.title}”`}
+                          aria-label={`Elimină din colecția „${activeModalCollection.title}”`}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+
+                {/* Row 2 across both columns: Evaluare (rating section) */}
+                <div
+                  className="book-detail-rating-section"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onPointerUp={(event) => event.stopPropagation()}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="book-detail-rating-inline">
+                    <span className="book-detail-rating-text">
+                      {currentBookRating > 0
+                        ? `Evaluarea ta: ${currentBookRating}/5`
+                        : 'Evaluarea ta:'}
+                    </span>
+                    <div className="book-detail-rating-stars">
+                      <PeekRating
+                        value={currentBookRating}
+                        defaultValue={currentBookRating || 0}
+                        count={5}
+                        shape="star"
+                        labels={['1 - Slabă', '2 - Acceptabilă', '3 - Bună', '4 - Foarte bună', '5 - Excelentă']}
+                        activeColor="#FFB703"
+                        idleColor="#52525b"
+                        tipColor="#1e293b"
+                        tipTextColor="#f8fafc"
+                        size={19}
+                        gap={3}
+                        lift={3}
+                        magnify={1.15}
+                        riseDuration={180}
+                        popScale={1.3}
+                        showTip={false}
+                        allowClear
+                        onChange={handleRateBook}
+                      />
                     </div>
                   </div>
                 </div>
@@ -3177,9 +3251,6 @@ function App() {
                             ref={nameInputRef}
                             id="profile-display-name-input"
                             type="text"
-                            required
-                            aria-required="true"
-                            pattern=".*\S.*"
                             value={displayNameInput}
                             onChange={(event) => {
                               setDisplayNameInput(event.target.value)
@@ -3250,7 +3321,7 @@ function App() {
 
                       <div className="profile-modal-field">
                         <label htmlFor="profile-csv-input" className="profile-modal-label">
-                          Librărie Goodreads
+                          Incarcă librărie Goodreads
                         </label>
                         <div className="profile-csv-row">
                           <label htmlFor="profile-csv-input" className="profile-file-upload">

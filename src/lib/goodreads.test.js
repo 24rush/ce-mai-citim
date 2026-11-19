@@ -307,6 +307,10 @@ test('uploadcsv lambda handler parses multipart form-data CSV and returns parsed
 
   const multipartBody = [
     `--${boundary}`,
+    'Content-Disposition: form-data; name="authUserId"',
+    '',
+    'auth-user-1234',
+    `--${boundary}`,
     'Content-Disposition: form-data; name="displayName"',
     '',
     'Alin',
@@ -360,7 +364,8 @@ test('uploadcsv lambda handler parses multipart form-data CSV and returns parsed
 
   const insertUserQuery = req.capturedQueries.find((q) => q.sqlText.includes('INSERT INTO users'))
   assert.ok(insertUserQuery)
-  assert.deepEqual(insertUserQuery.values, [jsonPayload.userId, 'Alin'])
+  assert.deepEqual(insertUserQuery.values, [jsonPayload.userId, 'Alin', 'auth-user-1234'])
+  assert.equal(insertUserQuery.sqlText.includes('last_access'), false)
 
   const deleteShelvesQuery = req.capturedQueries.find((q) => q.sqlText.includes('DELETE FROM user_shelves'))
   assert.ok(deleteShelvesQuery)
@@ -370,7 +375,7 @@ test('uploadcsv lambda handler parses multipart form-data CSV and returns parsed
   assert.ok(insertBookQuery)
   assert.match(
     insertBookQuery.sqlText,
-    /INSERT INTO books \(book_id, title, author, isbn, publisher, binding, number_of_pages, original_publication_year, description, main_category\)/,
+    /INSERT INTO books \(book_id, title, author, isbn, publisher, binding, number_of_pages, original_publication_year, description, main_category, google_books_queried\)/,
   )
   assert.deepEqual(insertBookQuery.values, [
     '10884',
@@ -383,6 +388,7 @@ test('uploadcsv lambda handler parses multipart form-data CSV and returns parsed
     2007,
     null,
     null,
+    true,
   ])
 
   const insertShelfQuery = req.capturedQueries.find((q) => q.sqlText.includes('INSERT INTO user_shelves'))
@@ -427,7 +433,8 @@ test('uploadcsv lambda handler parses multipart form-data CSV and returns parsed
   assert.equal(secondPayload.userId, jsonPayload.userId)
   const secondInsertUser = secondReq.capturedQueries.find((q) => q.sqlText.includes('INSERT INTO users'))
   assert.ok(secondInsertUser)
-  assert.deepEqual(secondInsertUser.values, [jsonPayload.userId, 'Alin'])
+  assert.deepEqual(secondInsertUser.values, [jsonPayload.userId, 'Alin', 'auth-user-1234'])
+  assert.equal(secondInsertUser.sqlText.includes('last_access'), false)
   const secondDeleteShelves = secondReq.capturedQueries.find((q) => q.sqlText.includes('DELETE FROM user_shelves'))
   assert.ok(secondDeleteShelves)
   assert.deepEqual(secondDeleteShelves.values, [jsonPayload.userId])
@@ -447,6 +454,7 @@ test('uploadcsv lambda handler parses multipart form-data CSV and returns parsed
       displayName: 'Alin 2',
       csv: csvContent,
       isNewUser: true,
+      authUserId: 'auth-user-5678',
     }),
     capturedQueries: [],
     async dbQuery(sqlText, values) {
@@ -560,6 +568,7 @@ test('uploadcsv enriches missing ISBN via Google Books API during import', async
     body: {
       displayName: 'Reader',
       csv,
+      authUserId: 'mock-auth-user',
     },
     googleBooksApiKey: 'mock-key',
     fetchFn: mockFetch,
@@ -1621,29 +1630,34 @@ test('uploadcsv fills in publication year and number of pages when CSV does not 
     return []
   }
 
-  const mockFetch = async () => ({
-    ok: true,
-    async json() {
-      return {
-        items: [
-          {
-            volumeInfo: {
-              title: 'The Road',
-              authors: ['Cormac McCarthy'],
-              publishedDate: '2005-11-15',
-              pageCount: 207,
-              industryIdentifiers: [
-                { type: 'ISBN_13', identifier: '9780307387899' },
-              ],
-              imageLinks: {
-                thumbnail: 'https://books.google.com/theroad.jpg',
+  const mockFetch = async (url) => {
+    if (typeof url === 'string' && url.includes('covers.openlibrary.org')) {
+      return { ok: false, status: 404 }
+    }
+    return {
+      ok: true,
+      async json() {
+        return {
+          items: [
+            {
+              volumeInfo: {
+                title: 'The Road',
+                authors: ['Cormac McCarthy'],
+                publishedDate: '2005-11-15',
+                pageCount: 207,
+                industryIdentifiers: [
+                  { type: 'ISBN_13', identifier: '9780307387899' },
+                ],
+                imageLinks: {
+                  thumbnail: 'https://books.google.com/theroad.jpg',
+                },
               },
             },
-          },
-        ],
-      }
-    },
-  })
+          ],
+        }
+      },
+    }
+  }
 
   const req = {
     method: 'POST',
@@ -1651,6 +1665,7 @@ test('uploadcsv fills in publication year and number of pages when CSV does not 
     body: {
       displayName: 'Bookworm',
       csv,
+      authUserId: 'mock-auth-user',
     },
     googleBooksApiKey: 'mock-key',
     fetchFn: mockFetch,
@@ -1721,6 +1736,7 @@ test('uploadcsv does NOT overwrite publication year or number of pages if CSV al
     body: {
       displayName: 'Bookworm',
       csv,
+      authUserId: 'mock-auth-user',
     },
     googleBooksApiKey: 'mock-key',
     fetchFn: mockFetch,
@@ -1756,7 +1772,7 @@ test('uploadcsv uses Year Published when Original Publication Year is empty in C
   assert.equal(books[0].publishedYear, 2019)
 })
 
-test('uploadcsv picks up Google Books cover and does not fall back on Open Library when called for metadata', async () => {
+test('uploadcsv falls back to Google Books cover when Open Library has no cover', async () => {
   const csv = [
     'Book Id,Title,Author,ISBN,My Rating,Publisher,Binding,Number of Pages,Original Publication Year,Date Read,Date Added,Bookshelves,Bookshelves with positions,My Review,Spoiler',
     '101,Meditations,Marcus Aurelius,9780140449334,5,Penguin,Paperback,,180,2023/01/01,2023/01/01,read,,,false',
@@ -1768,29 +1784,34 @@ test('uploadcsv picks up Google Books cover and does not fall back on Open Libra
     return []
   }
 
-  const mockFetch = async () => ({
-    ok: true,
-    async json() {
-      return {
-        items: [
-          {
-            volumeInfo: {
-              title: 'Meditations',
-              authors: ['Marcus Aurelius'],
-              publishedDate: '2006-04-27',
-              pageCount: 304,
-              industryIdentifiers: [
-                { type: 'ISBN_13', identifier: '9780140449334' },
-              ],
-              imageLinks: {
-                thumbnail: 'https://books.google.com/meditations.jpg&edge=curl',
+  const mockFetch = async (url) => {
+    if (typeof url === 'string' && url.includes('covers.openlibrary.org')) {
+      return { ok: false, status: 404 }
+    }
+    return {
+      ok: true,
+      async json() {
+        return {
+          items: [
+            {
+              volumeInfo: {
+                title: 'Meditations',
+                authors: ['Marcus Aurelius'],
+                publishedDate: '2006-04-27',
+                pageCount: 304,
+                industryIdentifiers: [
+                  { type: 'ISBN_13', identifier: '9780140449334' },
+                ],
+                imageLinks: {
+                  thumbnail: 'https://books.google.com/meditations.jpg&edge=curl',
+                },
               },
             },
-          },
-        ],
-      }
-    },
-  })
+          ],
+        }
+      },
+    }
+  }
 
   const req = {
     method: 'POST',
@@ -1798,6 +1819,7 @@ test('uploadcsv picks up Google Books cover and does not fall back on Open Libra
     body: {
       displayName: 'Philosopher',
       csv,
+      authUserId: 'mock-auth-user',
     },
     googleBooksApiKey: 'mock-key',
     fetchFn: mockFetch,
@@ -1810,11 +1832,61 @@ test('uploadcsv picks up Google Books cover and does not fall back on Open Libra
   assert.equal(res.statusCode, 200)
   const book = res.payload.books[0]
   assert.equal(book.imageUrl, 'https://books.google.com/meditations.jpg')
-  assert.ok(!book.imageUrl.includes('openlibrary.org'), 'Must NOT fall back on Open Library when Google Books has a cover')
 
   const insertCover = capturedQueries.find((q) => q.sqlText.includes('INSERT INTO covers'))
   assert.ok(insertCover, 'Should save discovered cover to DB')
   assert.ok(insertCover.values.includes('https://books.google.com/meditations.jpg'))
+})
+
+test('uploadcsv prioritizes Open Library cover when ISBN is present and skips Google Books', async () => {
+  const csv = [
+    'Book Id,Title,Author,ISBN,My Rating,Publisher,Binding,Number of Pages,Original Publication Year,Date Read,Date Added,Bookshelves,Bookshelves with positions,My Review,Spoiler',
+    '102,Meditations OL,Marcus Aurelius,9780140449334,5,Penguin,Paperback,300,180,2023/01/01,2023/01/01,read,,,false',
+  ].join('\n')
+
+  const capturedQueries = []
+  const mockDbQuery = async (sqlText, values) => {
+    capturedQueries.push({ sqlText, values })
+    return []
+  }
+
+  const calls = []
+  const mockFetch = async (url) => {
+    calls.push(url)
+    if (typeof url === 'string' && url.includes('covers.openlibrary.org')) {
+      return { ok: true, status: 200 }
+    }
+    return { ok: false, status: 500 }
+  }
+
+  const req = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: {
+      displayName: 'Philosopher',
+      csv,
+      authUserId: 'mock-auth-user',
+    },
+    googleBooksApiKey: 'mock-key',
+    fetchFn: mockFetch,
+    dbQuery: mockDbQuery,
+  }
+  const res = createMockRes()
+
+  await uploadCsvHandler(req, res)
+
+  assert.equal(res.statusCode, 200)
+  const book = res.payload.books[0]
+  assert.equal(book.imageUrl, 'https://covers.openlibrary.org/b/isbn/9780140449334-L.jpg')
+  assert.equal(
+    calls.some((u) => u.includes('googleapis.com')),
+    false,
+    'Must NOT query Google Books when Open Library has cover',
+  )
+
+  const insertCover = capturedQueries.find((q) => q.sqlText.includes('INSERT INTO covers'))
+  assert.ok(insertCover, 'Should save Open Library cover to DB')
+  assert.ok(insertCover.values.includes('https://covers.openlibrary.org/b/isbn/9780140449334-L.jpg'))
 })
 
 test('searchGoogleBooks continues to title search to find cover if exact ISBN volume lacks cover', async () => {
@@ -1934,6 +2006,7 @@ test('uploadcsv queries Google only for books that are not already in the databa
     body: {
       displayName: 'Collector',
       csv,
+      authUserId: 'mock-auth-user',
     },
     googleBooksApiKey: 'mock-key',
     fetchFn: mockFetch,
@@ -2070,6 +2143,7 @@ test('uploadcsv enriches description and mainCategory from Google Books and save
     body: {
       displayName: 'ScifiFan',
       csv,
+      authUserId: 'mock-auth-user',
     },
     googleBooksApiKey: 'mock-key',
     fetchFn: mockFetch,
@@ -2136,7 +2210,7 @@ test('description and mainCategory only come from google books not csv', () => {
   assert.equal(withGoogleProps.mainCategory, 'Science Fiction')
 })
 
-test('uploadcsv calls google books for every book to fill in description and mainCategory, even if ISBN is present in CSV', async () => {
+test('uploadcsv calls google books when Open Library has no cover to fill in description and mainCategory', async () => {
   // CSV book already has ISBN, Pages, and Publication Year
   const csv = [
     'Book Id,Title,Author,ISBN,My Rating,Publisher,Binding,Number of Pages,Original Publication Year,Date Read,Date Added,Bookshelves,Bookshelves with positions,My Review,Spoiler',
@@ -2145,6 +2219,9 @@ test('uploadcsv calls google books for every book to fill in description and mai
 
   const googleCalls = []
   const mockFetch = async (url) => {
+    if (typeof url === 'string' && url.includes('covers.openlibrary.org')) {
+      return { ok: false, status: 404 }
+    }
     googleCalls.push(url)
     return {
       ok: true,
@@ -2179,6 +2256,7 @@ test('uploadcsv calls google books for every book to fill in description and mai
     body: {
       displayName: 'Astronaut',
       csv,
+      authUserId: 'mock-auth-user',
     },
     googleBooksApiKey: 'mock-key',
     fetchFn: mockFetch,
@@ -2247,6 +2325,7 @@ test('uploadcsv when isbn is required uses description and category from that si
     body: {
       displayName: 'Hacker',
       csv,
+      authUserId: 'mock-auth-user',
     },
     googleBooksApiKey: 'mock-key',
     fetchFn: mockFetch,
@@ -2282,24 +2361,29 @@ test('uploadcsv limits the length of description text to 500 chars', async () =>
     '707,Star Wars,George Lucas,9780345260796,5,Del Rey,Paperback,260,1976,2023/07/01,2023/07/01,read,,,false',
   ].join('\n')
 
-  const mockFetch = async () => ({
-    ok: true,
-    async json() {
-      return {
-        items: [
-          {
-            volumeInfo: {
-              title: 'Star Wars',
-              authors: ['George Lucas'],
-              description: longDesc,
-              categories: ['Science Fiction'],
-              industryIdentifiers: [{ type: 'ISBN_13', identifier: '9780345260796' }],
+  const mockFetch = async (url) => {
+    if (typeof url === 'string' && url.includes('covers.openlibrary.org')) {
+      return { ok: false, status: 404 }
+    }
+    return {
+      ok: true,
+      async json() {
+        return {
+          items: [
+            {
+              volumeInfo: {
+                title: 'Star Wars',
+                authors: ['George Lucas'],
+                description: longDesc,
+                categories: ['Science Fiction'],
+                industryIdentifiers: [{ type: 'ISBN_13', identifier: '9780345260796' }],
+              },
             },
-          },
-        ],
-      }
-    },
-  })
+          ],
+        }
+      },
+    }
+  }
 
   const capturedQueries = []
   const mockDbQuery = async (sqlText, values) => {
@@ -2310,7 +2394,7 @@ test('uploadcsv limits the length of description text to 500 chars', async () =>
   const req = {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: { displayName: 'Jedi', csv },
+    body: { displayName: 'Jedi', csv, authUserId: 'mock-auth-user' },
     googleBooksApiKey: 'mock-key',
     fetchFn: mockFetch,
     dbQuery: mockDbQuery,
@@ -2327,6 +2411,67 @@ test('uploadcsv limits the length of description text to 500 chars', async () =>
   const insertBookQuery = capturedQueries.find((q) => q.sqlText.includes('INSERT INTO books'))
   assert.ok(insertBookQuery)
   assert.ok(insertBookQuery.values.includes(longDesc.slice(0, 500)))
+})
+
+test('uploadcsv rejects unauthenticated requests with 401', async () => {
+  const csv = [
+    'Book Id,Title,Author,ISBN,My Rating,Publisher,Binding,Number of Pages,Original Publication Year,Date Read,Date Added,Bookshelves,Bookshelves with positions,My Review,Spoiler',
+    '101,Some Book,Author,9780000000001,4,Publisher,Paperback,200,2020,2023/01/01,2023/01/01,read,,,false',
+  ].join('\n')
+
+  const req = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: { csv }, // No authUserId
+  }
+  const res = createMockRes()
+
+  await uploadCsvHandler(req, res)
+
+  assert.equal(res.statusCode, 401)
+  assert.match(res.payload.error, /unauthorized|authentication required/i)
+})
+
+test('uploadcsv allows request without displayName and does not update last_access', async () => {
+  const csv = [
+    'Book Id,Title,Author,ISBN,My Rating,Publisher,Binding,Number of Pages,Original Publication Year,Date Read,Date Added,Bookshelves,Bookshelves with positions,My Review,Spoiler',
+    '102,Fast Upload Book,Author,9780000000002,5,Publisher,Paperback,300,2021,2023/02/01,2023/02/01,read,,,false',
+  ].join('\n')
+
+  const capturedQueries = []
+  const mockDbQuery = async (sqlText, values) => {
+    capturedQueries.push({ sqlText, values })
+    return []
+  }
+
+  const req = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: {
+      csv,
+      authUserId: 'authenticated-user-xyz',
+      // No displayName!
+    },
+    googleBooksApiKey: 'mock-key',
+    fetchFn: async () => ({ ok: false }),
+    dbQuery: mockDbQuery,
+  }
+  const res = createMockRes()
+
+  await uploadCsvHandler(req, res)
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.payload.books.length, 1)
+
+  // Verify that last_access was NOT in any query
+  for (const query of capturedQueries) {
+    assert.equal(query.sqlText.includes('last_access'), false, 'last_access must NOT be updated')
+  }
+
+  // Verify user insertion had no displayName requirement
+  const insertUserQuery = capturedQueries.find((q) => q.sqlText.includes('INSERT INTO users'))
+  assert.ok(insertUserQuery)
+  assert.equal(insertUserQuery.values.includes('authenticated-user-xyz'), true)
 })
 
 test('searchGoogleBooksVolumes returns top 10 mapped books from Google Books', async () => {
@@ -2682,6 +2827,120 @@ test('collections endpoint toggles collection privacy between private and public
   })
   assert.equal(directResult.success, true)
   assert.equal(directResult.isPrivate, true)
+})
+
+test('isbn endpoint server-side check skips Google Books if google_books_queried is already true in DB', async () => {
+  const fetchCalls = []
+  const mockFetch = async (url) => {
+    fetchCalls.push(url)
+    return { ok: true, async json() { return { items: [] } } }
+  }
+
+  const mockDbQuery = async (sqlText, values) => {
+    if (sqlText.includes('SELECT') && sqlText.includes('FROM books')) {
+      return [
+        {
+          book_id: 'book-already-queried',
+          title: 'Some Book',
+          author: 'Some Author',
+          isbn: '9781111111111',
+          description: null, // Even with null description!
+          main_category: null,
+          google_books_queried: true, // Already queried previously
+          cover_url: 'https://covers.database.com/book.jpg',
+        },
+      ]
+    }
+    return []
+  }
+
+  const req = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: {
+      bookId: 'book-already-queried',
+      userId: 'testuser',
+    },
+    fetchFn: mockFetch,
+    dbQuery: mockDbQuery,
+  }
+  const res = createMockRes()
+
+  await isbnHandler(req, res)
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.payload.success, true)
+  assert.equal(fetchCalls.length, 0, 'Must NOT query Google Books because google_books_queried is true in DB')
+})
+
+test('isbn endpoint server-side check queries Google Books when google_books_queried is false and marks it true in DB', async () => {
+  const fetchCalls = []
+  const mockFetch = async (url) => {
+    fetchCalls.push(url)
+    return {
+      ok: true,
+      async json() {
+        return {
+          items: [
+            {
+              volumeInfo: {
+                title: 'Unenriched Book',
+                authors: ['New Author'],
+                description: 'A fascinating story discovered on-demand.',
+                mainCategory: 'History',
+                industryIdentifiers: [{ type: 'ISBN_13', identifier: '9782222222222' }],
+              },
+            },
+          ],
+        }
+      },
+    }
+  }
+
+  const capturedQueries = []
+  const mockDbQuery = async (sqlText, values) => {
+    capturedQueries.push({ sqlText, values })
+    if (sqlText.includes('SELECT') && sqlText.includes('FROM books')) {
+      return [
+        {
+          book_id: 'book-needs-enrichment',
+          title: 'Unenriched Book',
+          author: 'New Author',
+          isbn: '9782222222222',
+          description: null,
+          main_category: null,
+          google_books_queried: false,
+          cover_url: null,
+        },
+      ]
+    }
+    return []
+  }
+
+  const req = {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: {
+      bookId: 'book-needs-enrichment',
+      userId: 'testuser',
+    },
+    fetchFn: mockFetch,
+    dbQuery: mockDbQuery,
+  }
+  const res = createMockRes()
+
+  await isbnHandler(req, res)
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.payload.success, true)
+  assert.equal(res.payload.description, 'A fascinating story discovered on-demand.')
+  assert.equal(res.payload.mainCategory, 'History')
+  assert.ok(fetchCalls.length >= 1, 'Should query Google Books because book has not been queried')
+
+  const updateQuery = capturedQueries.find((q) => q.sqlText.includes('UPDATE books'))
+  assert.ok(updateQuery, 'Should update books table')
+  assert.ok(updateQuery.sqlText.includes('google_books_queried'), 'Should update google_books_queried in DB')
+  assert.ok(updateQuery.values.includes(true), 'Should set google_books_queried to true in values')
 })
 
 

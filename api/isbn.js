@@ -1,5 +1,5 @@
 import { createDefaultDbQuery, ensureEnvLoaded } from './_lib/db.js'
-import { convertIsbn10To13, convertIsbn13To10 } from '../src/lib/goodreads.js'
+import { convertIsbn10To13, convertIsbn13To10, resolveBookIsbns } from '../src/lib/goodreads.js'
 
 export const getGoogleBooksApiKey = () => {
   ensureEnvLoaded()
@@ -320,12 +320,84 @@ export const searchGoogleBooks = async ({
   return partialResult
 }
 
+export const checkOpenLibraryCover = async (isbn, fetchFn = fetch) => {
+  const clean = cleanIsbn(isbn)
+  if (!clean || clean.length < 8) return null
+
+  const candidates = [clean]
+  const cand13 = clean.length === 10 ? convertIsbn10To13(clean) : null
+  const cand10 = clean.length === 13 ? convertIsbn13To10(clean) : null
+  if (cand13 && cand13 !== clean) candidates.push(cand13)
+  if (cand10 && cand10 !== clean) candidates.push(cand10)
+
+  for (const cand of candidates) {
+    const url = `https://covers.openlibrary.org/b/isbn/${cand}-L.jpg?default=false`
+    try {
+      let res
+      try {
+        res = await fetchFn(url, { method: 'HEAD' })
+      } catch {
+        res = null
+      }
+      if (!res || res.status === 405 || res.status === 501) {
+        res = await fetchFn(url, { method: 'GET' })
+      }
+      if (res && res.ok && res.status !== 404) {
+        return `https://covers.openlibrary.org/b/isbn/${cand}-L.jpg`
+      }
+    } catch {
+      // Continue to next candidate
+    }
+  }
+
+  return null
+}
+
+export const updateBookMetadataInDb = async ({
+  userId: _userId,
+  bookId,
+  isbn,
+  description,
+  mainCategory,
+  pageCount,
+  publishedYear,
+  googleBooksQueried = true,
+  queryFn,
+}) => {
+  if (!bookId) return null
+  const executeQuery = queryFn || (await createDefaultDbQuery())
+  const sql = `
+    UPDATE books
+    SET
+      isbn = COALESCE(NULLIF(isbn, ''), $1),
+      description = COALESCE(NULLIF(description, ''), $2),
+      main_category = COALESCE(NULLIF(main_category, ''), $3),
+      number_of_pages = COALESCE(number_of_pages, $4),
+      original_publication_year = COALESCE(original_publication_year, $5),
+      google_books_queried = COALESCE($6, google_books_queried, TRUE),
+      updated_at = NOW()
+    WHERE book_id = $7
+    RETURNING book_id, title, author, isbn, description, main_category, number_of_pages, original_publication_year, google_books_queried;
+  `.trim()
+
+  const rows = await executeQuery(sql, [
+    isbn || null,
+    description ? String(description).slice(0, 500) : null,
+    mainCategory || null,
+    pageCount && pageCount > 0 ? pageCount : null,
+    publishedYear && publishedYear > 0 ? publishedYear : null,
+    googleBooksQueried,
+    bookId,
+  ])
+  return rows?.[0] || null
+}
+
 export const updateBookIsbnInDb = async ({ userId: _userId, bookId, isbn, queryFn }) => {
   if (!bookId || !isbn) return null
   const executeQuery = queryFn || (await createDefaultDbQuery())
   const sql = `
     UPDATE books
-    SET isbn = $1, updated_at = NOW()
+    SET isbn = $1, google_books_queried = TRUE, updated_at = NOW()
     WHERE book_id = $2
       AND (isbn IS NULL OR isbn = '')
     RETURNING book_id, title, author, isbn;
@@ -496,6 +568,7 @@ export default async function handler(req, res) {
     const author = String(body.author || query.author || '').trim()
     const userId = String(body.userId || query.userId || '').trim()
     const bookId = String(body.bookId || query.bookId || '').trim()
+    const inputIsbn = cleanIsbn(body.isbn || query.isbn)
     const isBackfill = Boolean(
       body.backfill ||
       query.backfill === 'true' ||
@@ -526,19 +599,89 @@ export default async function handler(req, res) {
       return res.status(200).json(backfillResult)
     }
 
-    if (!title) {
+    const executeQuery = queryFn || (await createDefaultDbQuery())
+
+    let dbBook = null
+    if (bookId) {
+      try {
+        const rows = await executeQuery(
+          `SELECT
+             b.book_id,
+             b.title,
+             b.author,
+             b.isbn,
+             b.number_of_pages,
+             b.original_publication_year,
+             b.description,
+             b.main_category,
+             b.google_books_queried,
+             c.url AS cover_url
+           FROM books b
+           LEFT JOIN covers c ON c.isbn = b.isbn AND b.isbn IS NOT NULL AND b.isbn <> ''
+           WHERE b.book_id = $1`,
+          [bookId],
+        )
+        dbBook = rows?.[0] || null
+      } catch (err) {
+        console.warn('[isbn] Failed to query book by bookId:', err?.message)
+      }
+    }
+
+    const effectiveTitle = title || dbBook?.title || ''
+    const effectiveAuthor = author || dbBook?.author || ''
+    const effectiveIsbn = inputIsbn || cleanIsbn(dbBook?.isbn) || ''
+
+    // Server-side check:
+    // If google_books_queried is already true, or both description and mainCategory exist in DB:
+    // Google Books has already been queried (or no fields are missing) -> skip external search!
+    if (dbBook && (dbBook.google_books_queried || (dbBook.description && dbBook.main_category))) {
+      return res.status(200).json({
+        success: true,
+        isbn: dbBook.isbn || effectiveIsbn || null,
+        title: dbBook.title || effectiveTitle,
+        author: dbBook.author || effectiveAuthor,
+        coverUrl: dbBook.cover_url || null,
+        imageUrl: dbBook.cover_url || null,
+        thumbnail: dbBook.cover_url || null,
+        publishedDate: null,
+        publishedYear: dbBook.original_publication_year || null,
+        pageCount: dbBook.number_of_pages || null,
+        description: dbBook.description || null,
+        mainCategory: dbBook.main_category || null,
+        updated: false,
+      })
+    }
+
+    if (!effectiveTitle && !effectiveIsbn) {
       return res.status(400).json({ error: 'Book title is required.' })
     }
 
     const searchResult = await searchGoogleBooks({
-      title,
-      author,
-      isbn: body.isbn || query.isbn,
+      title: effectiveTitle,
+      author: effectiveAuthor,
+      isbn: effectiveIsbn,
       apiKey,
       fetchFn,
     })
 
     if (!searchResult || !searchResult.isbn) {
+      // Mark google_books_queried = true in DB so we don't repeatedly query Google Books when no data exists
+      if (bookId) {
+        try {
+          await updateBookMetadataInDb({
+            userId,
+            bookId,
+            isbn: effectiveIsbn,
+            description: dbBook?.description,
+            mainCategory: dbBook?.main_category,
+            pageCount: dbBook?.number_of_pages,
+            publishedYear: dbBook?.original_publication_year,
+            googleBooksQueried: true,
+            queryFn: executeQuery,
+          })
+        } catch {}
+      }
+
       return res.status(404).json({
         success: false,
         isbn: null,
@@ -547,16 +690,34 @@ export default async function handler(req, res) {
     }
 
     let updatedDbRecord = null
-    if (userId && bookId) {
+    if (bookId) {
       try {
-        updatedDbRecord = await updateBookIsbnInDb({
-          userId,
-          bookId,
-          isbn: searchResult.isbn,
-          queryFn,
-        })
+        if (
+          searchResult.description ||
+          searchResult.mainCategory ||
+          searchResult.pageCount ||
+          searchResult.publishedYear
+        ) {
+          updatedDbRecord = await updateBookMetadataInDb({
+            userId,
+            bookId,
+            isbn: searchResult.isbn,
+            description: searchResult.description,
+            mainCategory: searchResult.mainCategory,
+            pageCount: searchResult.pageCount,
+            publishedYear: searchResult.publishedYear,
+            queryFn,
+          })
+        } else {
+          updatedDbRecord = await updateBookIsbnInDb({
+            userId,
+            bookId,
+            isbn: searchResult.isbn,
+            queryFn,
+          })
+        }
       } catch (dbErr) {
-        console.error('Failed to update book ISBN in database:', dbErr)
+        console.error('Failed to update book metadata in database:', dbErr)
       }
     }
 
@@ -583,6 +744,8 @@ export default async function handler(req, res) {
       publishedDate: searchResult.publishedDate || null,
       publishedYear: searchResult.publishedYear || null,
       pageCount: searchResult.pageCount || null,
+      description: searchResult.description || null,
+      mainCategory: searchResult.mainCategory || null,
       updated: Boolean(updatedDbRecord),
     })
   } catch (error) {

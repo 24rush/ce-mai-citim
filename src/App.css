@@ -15,11 +15,17 @@ body {
 .app-shell {
   width: min(1200px, calc(100% - 32px));
   margin: 0 auto;
-  padding: 30px 0 72px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  padding: 30px 0 92px;
 }
 
 .library-header {
-  margin-bottom: 30px;
+  flex-shrink: 0;
+  margin-bottom: 15px;
 }
 
 .library-header h1 {
@@ -372,8 +378,8 @@ body {
 }
 
 .book-detail-back-button {
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.08);
@@ -395,6 +401,7 @@ body {
   transform: scale(1.05);
 }
 
+.book-detail-action-button,
 .book-detail-share-button {
   display: inline-flex;
   align-items: center;
@@ -411,6 +418,7 @@ body {
   box-sizing: border-box;
 }
 
+.book-detail-action-button:hover,
 .book-detail-share-button:hover {
   background: rgba(139, 92, 246, 0.3);
   border-color: rgba(167, 139, 250, 0.7);
@@ -419,6 +427,7 @@ body {
   box-shadow: 0 4px 12px rgba(139, 92, 246, 0.25);
 }
 
+.book-detail-action-button:active,
 .book-detail-share-button:active {
   transform: scale(0.95);
 }
@@ -451,10 +460,10 @@ body {
 
 .modal-close-btn,
 .profile-modal-close {
-  width: 32px;
-  height: 32px;
-  min-width: 32px;
-  min-height: 32px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.08);
@@ -493,13 +502,13 @@ body {
 .book-detail-content {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
 }
 
 .book-detail-top-section {
   display: flex;
   flex-direction: row;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 16px;
   width: 100%;
 }
@@ -515,7 +524,6 @@ body {
 .book-detail-cover-col {
   display: flex;
   flex-direction: column;
-  gap: 10px;
   width: min(240px, 58vw);
   max-width: 260px;
   margin: 0;
@@ -536,11 +544,20 @@ body {
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
+  width: 100%;
+}
+
+.book-detail-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
 }
 
 .book-detail-shelf-action {
   position: relative;
   width: 100%;
+  margin: 0;
 }
 
 .book-detail-review-card {
@@ -588,8 +605,15 @@ body {
 .book-detail-shelf-action-row {
   display: flex;
   align-items: stretch;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
+}
+
+.book-shelf-dropdown-wrapper {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
 }
 
 .book-shelf-dropdown-btn-group {
@@ -720,126 +744,46 @@ body {
   font-weight: 600;
 }
 
-/* Book Detail Rating Popup & Trigger */
+/* Inline Book Rating Section */
 .book-detail-rating-section {
   position: relative;
-  width: 100%;
-  margin-top: 6px;
-}
-
-.book-rate-trigger-btn {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
   width: 100%;
-  padding: 6px 10px;
-  font-size: 11px;
-  font-weight: 500;
-  color: #94a3b8;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  cursor: pointer;
+  min-height: 44px;
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  box-sizing: border-box;
+  margin: 0;
   transition: all 0.2s ease;
 }
 
-.book-rate-trigger-btn:hover {
+.book-detail-rating-section:hover {
   background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(245, 180, 0, 0.35);
-  color: #f8fafc;
+  border-color: rgba(255, 183, 3, 0.35);
 }
 
-.book-rate-trigger-btn .star-lit {
-  color: #f5b400;
-  fill: #f5b400;
-}
-
-.book-rating-popup-wrapper {
-  width: 100%;
-  display: flex;
-  justify-content: center;
-}
-
-.book-rating-popup {
-  position: relative;
-  width: 100%;
-  padding: 6px 8px;
-  background: rgba(15, 23, 42, 0.96);
-  border: 1px solid rgba(245, 180, 0, 0.3);
-  border-radius: 10px;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 12px rgba(245, 180, 0, 0.08);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  animation: fadeInRatingPopup 0.18s ease-out;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  box-sizing: border-box;
-}
-
-@keyframes fadeInRatingPopup {
-  from {
-    opacity: 0;
-    transform: translateY(-4px) scale(0.98);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-.book-rating-popup-header {
-  position: relative;
+.book-detail-rating-inline {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-around;
+  gap: 14px;
   width: 100%;
-  margin-bottom: 2px;
-  padding: 0 20px;
-  box-sizing: border-box;
 }
 
-.book-rating-popup-title {
-  font-size: 11px;
+.book-detail-rating-text {
+  font-size: 13px;
   font-weight: 600;
-  color: #f1f5f9;
-  letter-spacing: -0.01em;
-  text-align: center;
-}
-
-.book-rating-popup-close-btn {
-  position: absolute;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: #64748b;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.book-rating-popup-close-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
   color: #f8fafc;
+  white-space: nowrap;
+  letter-spacing: -0.01em;
 }
 
-.book-rating-stars-row {
+.book-detail-rating-stars {
   display: flex;
-  justify-content: center;
   align-items: center;
-  width: 100%;
-  padding: 0;
-  margin: 0;
 }
 
 .book-detail-cover img {
@@ -884,11 +828,12 @@ body {
 
 .book-detail-label {
   color: #cbd5e1;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   justify-content: center;
+  margin-top: 6px;
 }
 
 .book-detail-grid {
@@ -897,26 +842,66 @@ body {
   gap: 3px;
 }
 
-.book-detail-qr-box {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  align-self: flex-start;
-  width: auto;
-  gap: 8px;
-  margin-top: 2px;
+/* In-Modal Non-Fullscreen QR Code Overlay */
+.book-detail-modal.qr-modal-open {
+  overflow: hidden;
 }
 
-.book-detail-qr-image {
-  width: 130px;
-  height: 130px;
-  max-width: 100%;
-  aspect-ratio: 1 / 1;
-  border-radius: 10px;
-  background: #fff;
-  padding: 4px;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.25);
-  box-sizing: border-box;
+.qr-modal-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: inherit;
+  padding: 12px;
+  animation: qrBackdropFadeIn 0.18s ease-out;
+  cursor: pointer;
+}
+
+@keyframes qrBackdropFadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.qr-modal-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  padding: 10px;
+  border-radius: 16px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75), 0 0 25px rgba(139, 92, 246, 0.2);
+  cursor: default;
+  animation: qrCardPop 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes qrCardPop {
+  from {
+    transform: scale(0.92);
+    opacity: 0;
+  }
+
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.qr-modal-image {
+  display: block;
+  width: min(190px, 50vw);
+  height: min(190px, 50vw);
+  border-radius: 6px;
+  object-fit: contain;
 }
 
 .book-detail-metric strong,
@@ -1340,12 +1325,13 @@ body {
 }
 
 .book-controls {
+  flex-shrink: 0;
   position: relative;
   z-index: 10;
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
   padding-left: 8px;
   justify-content: center;
 }
@@ -1465,11 +1451,15 @@ body {
 }
 
 .carousel-panel {
+  --book-cover-h: clamp(190px, 33vh, 260px);
+  --book-cover-w: calc(var(--book-cover-h) * 180 / 260);
   display: flex;
   width: 100%;
   align-items: center;
   justify-content: center;
   gap: 20px;
+  flex: 1 0 auto;
+  min-height: min-content;
 }
 
 .books-carousel {
@@ -1515,7 +1505,7 @@ body {
   --card-scale: 1;
   --card-translate-y: 0px;
   --card-opacity: 1;
-  min-width: 200px;
+  min-width: calc(var(--book-cover-w, 180px) + 20px);
   scroll-snap-align: start;
   display: flex;
   flex-direction: column;
@@ -1534,8 +1524,8 @@ body {
 }
 
 .book-cover-surface {
-  width: 180px;
-  height: 260px;
+  width: var(--book-cover-w, 180px);
+  height: var(--book-cover-h, 260px);
   cursor: pointer;
   transform: scale(var(--card-scale));
   transform-origin: center bottom;
@@ -1558,13 +1548,13 @@ body {
   align-items: center;
   justify-content: center;
   perspective: 900px;
-  width: 180px;
-  height: 260px;
+  width: var(--book-cover-w, 180px);
+  height: var(--book-cover-h, 260px);
 }
 
 .book-3d-wrapper .book {
-  width: 180px;
-  height: 260px;
+  width: var(--book-cover-w, 180px);
+  height: var(--book-cover-h, 260px);
   position: relative;
   transform-style: preserve-3d;
   transform: rotateY(-20deg);
@@ -1575,8 +1565,8 @@ body {
   position: absolute;
   top: 0;
   left: 0;
-  width: 180px;
-  height: 260px;
+  width: var(--book-cover-w, 180px);
+  height: var(--book-cover-h, 260px);
   transform: translateZ(calc(var(--book-thickness, 24px) / 2));
   background-color: #0f172a;
   border-radius: 0 2px 2px 0;
@@ -1588,7 +1578,7 @@ body {
   right: 0;
   top: 4px;
   width: 20px;
-  height: 252px;
+  height: calc(var(--book-cover-h, 260px) - 8px);
   transform: translateZ(0px);
   border-radius: 0 2px 2px 0;
   box-shadow: inset 1px 0 3px rgba(0, 0, 0, 0.25);
@@ -1601,16 +1591,16 @@ body {
   top: 0;
   left: 0;
   content: ' ';
-  width: 180px;
-  height: 260px;
+  width: var(--book-cover-w, 180px);
+  height: var(--book-cover-h, 260px);
   transform: translateZ(calc(var(--book-thickness, 24px) / -2));
   background-color: #0f172a;
   border-radius: 0 2px 2px 0;
 }
 
 .book-cover-placeholder-flat {
-  width: 180px;
-  height: 260px;
+  width: var(--book-cover-w, 180px);
+  height: var(--book-cover-h, 260px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1618,8 +1608,8 @@ body {
 }
 
 .book-cover-placeholder-flat .book-cover-art {
-  width: 180px;
-  height: 260px;
+  width: var(--book-cover-w, 180px);
+  height: var(--book-cover-h, 260px);
   border-radius: 4px;
 }
 
@@ -1668,8 +1658,9 @@ body {
 .book-meta h2 {
   margin: 0;
   font-size: 1.05rem;
-  color: #f8fafc;
+  color: #ffffff;
   line-height: 1.2;
+  font-weight: 600;
   word-break: break-word;
   display: -webkit-box;
   -webkit-line-clamp: 4;
@@ -1726,7 +1717,7 @@ body {
 
 .book-meta p {
   margin: 2px 0 4px;
-  color: #cbd5e1;
+  color: #E2E8F0;
   font-size: 0.92rem;
 }
 
@@ -1753,13 +1744,13 @@ body {
 
 
 .loading-card {
-  min-width: 180px;
+  min-width: var(--book-cover-w, 180px);
   opacity: 0.8;
 }
 
 .loading-cover {
-  width: 180px;
-  height: 260px;
+  width: var(--book-cover-w, 180px);
+  height: var(--book-cover-h, 260px);
   border-radius: 12px;
   background: linear-gradient(120deg, rgba(51, 65, 85, 0.9), rgba(15, 23, 42, 0.9), rgba(51, 65, 85, 0.9));
   background-size: 200% 100%;
@@ -1795,8 +1786,9 @@ body {
   transition: color 0.15s ease;
 }
 
-.star.filled {
-  color: var(--accent-color);
+.star.filled,
+.book-rating .star.filled {
+  color: #FFB703;
 }
 
 .book-meta a {
@@ -1861,7 +1853,12 @@ body {
   .app-shell {
     width: 100%;
     max-width: none;
-    padding: 24px 0 48px;
+    min-height: 100vh;
+    min-height: 100dvh;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    padding: 24px 0 92px;
   }
 
   .library-header-row {
@@ -1943,7 +1940,7 @@ body {
   }
 
   .book-card {
-    min-width: 190px;
+    min-width: calc(var(--book-cover-w, 180px) + 10px);
     transform: none !important;
     --card-translate-y: 0px !important;
     touch-action: pan-x pan-y;
@@ -1957,11 +1954,6 @@ body {
     width: min(210px, 56vw);
     max-width: 230px;
   }
-
-  .book-detail-qr-image {
-    width: 110px;
-    height: 110px;
-  }
 }
 
 @media (max-width: 380px) {
@@ -1969,11 +1961,7 @@ body {
     width: min(180px, 52vw);
   }
 
-  .book-detail-qr-image {
-    width: 90px;
-    height: 90px;
-  }
-
+  .book-detail-action-button,
   .book-detail-share-button {
     width: 34px;
     height: 34px;

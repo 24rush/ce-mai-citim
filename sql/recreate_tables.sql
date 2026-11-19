@@ -30,6 +30,7 @@ CREATE TABLE books (
   original_publication_year SMALLINT,
   description VARCHAR(500),
   main_category TEXT,
+  google_books_queried BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

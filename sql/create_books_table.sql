@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS books (
   original_publication_year SMALLINT,
   description VARCHAR(500),
   main_category TEXT,
+  google_books_queried BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -19,3 +20,4 @@ CREATE INDEX IF NOT EXISTS idx_books_isbn ON books (isbn);
 -- ALTER TABLE books ADD COLUMN IF NOT EXISTS description VARCHAR(500);
 -- ALTER TABLE books ALTER COLUMN description TYPE VARCHAR(500);
 -- ALTER TABLE books ADD COLUMN IF NOT EXISTS main_category TEXT;
+-- ALTER TABLE books ADD COLUMN IF NOT EXISTS google_books_queried BOOLEAN NOT NULL DEFAULT FALSE;

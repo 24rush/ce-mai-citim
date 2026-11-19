@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { createDefaultDbQuery } from './_lib/db.js'
-import { cleanIsbn, getGoogleBooksApiKey, searchGoogleBooks, upsertCoverInDb } from './isbn.js'
+import { checkOpenLibraryCover, cleanIsbn, getGoogleBooksApiKey, searchGoogleBooks, upsertCoverInDb } from './isbn.js'
 import {
   USER_ID_COOKIE_NAME,
   cleanCsvValue,
@@ -39,6 +39,7 @@ export const BOOK_DB_COLUMNS = [
   ...CSV_BOOK_COLUMNS,
   { dbColumn: 'description', type: 'string' },
   { dbColumn: 'main_category', type: 'string' },
+  { dbColumn: 'google_books_queried', type: 'boolean' },
 ]
 
 export const ALLOWED_SHELVES = new Set([
@@ -214,6 +215,7 @@ export const parseCsvForDatabase = (csvText = '') => {
 
     dbRow.description = null
     dbRow.main_category = null
+    dbRow.google_books_queried = false
 
     const isbnColIndex = headerIndexMap.get('isbn')
     const isbn13ColIndex =
@@ -311,28 +313,38 @@ export const parseCsvForDatabase = (csvText = '') => {
 
 export const upsertUserInDatabase = async ({ userId, displayName, authUserId, queryFn }) => {
   const executeQuery = queryFn || (await createDefaultDbQuery())
+  const cleanName = String(displayName || '').trim()
 
   if (authUserId) {
+    if (cleanName) {
+      const sqlText = `
+        INSERT INTO users (user_id, display_name, auth_user_id)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (user_id)
+        DO UPDATE SET
+          display_name = EXCLUDED.display_name,
+          auth_user_id = COALESCE(EXCLUDED.auth_user_id, users.auth_user_id);
+      `.trim()
+      await executeQuery(sqlText, [userId, cleanName, authUserId])
+    } else {
+      const sqlText = `
+        INSERT INTO users (user_id, auth_user_id)
+        VALUES ($1, $2)
+        ON CONFLICT (user_id)
+        DO UPDATE SET
+          auth_user_id = COALESCE(EXCLUDED.auth_user_id, users.auth_user_id);
+      `.trim()
+      await executeQuery(sqlText, [userId, authUserId])
+    }
+  } else if (cleanName) {
     const sqlText = `
-      INSERT INTO users (user_id, display_name, auth_user_id, last_access)
-      VALUES ($1, $2, $3, NOW())
+      INSERT INTO users (user_id, display_name)
+      VALUES ($1, $2)
       ON CONFLICT (user_id)
       DO UPDATE SET
-        display_name = EXCLUDED.display_name,
-        auth_user_id = COALESCE(EXCLUDED.auth_user_id, users.auth_user_id),
-        last_access = NOW();
+        display_name = EXCLUDED.display_name;
     `.trim()
-    await executeQuery(sqlText, [userId, displayName, authUserId])
-  } else {
-    const sqlText = `
-      INSERT INTO users (user_id, display_name, last_access)
-      VALUES ($1, $2, NOW())
-      ON CONFLICT (user_id)
-      DO UPDATE SET
-        display_name = EXCLUDED.display_name,
-        last_access = NOW();
-    `.trim()
-    await executeQuery(sqlText, [userId, displayName])
+    await executeQuery(sqlText, [userId, cleanName])
   }
 }
 
@@ -371,6 +383,7 @@ export const insertBooksIntoDatabase = async ({ userId, dbRows, queryFn }) => {
     'original_publication_year = COALESCE(EXCLUDED.original_publication_year, books.original_publication_year)',
     "description = COALESCE(NULLIF(EXCLUDED.description, ''), books.description)",
     "main_category = COALESCE(NULLIF(EXCLUDED.main_category, ''), books.main_category)",
+    'google_books_queried = (EXCLUDED.google_books_queried OR books.google_books_queried)',
     'updated_at = NOW()',
   ]
 
@@ -465,6 +478,7 @@ export const enrichMissingIsbns = async ({
   const existingByBookId = new Map()
   const existingByIsbn = new Map()
   const existingByTitleAuthor = new Map()
+  const existingCoversByIsbn = new Map()
 
   if (queryFn) {
     const candidateBookIds = [
@@ -500,6 +514,7 @@ export const enrichMissingIsbns = async ({
             b.original_publication_year,
             b.description,
             b.main_category,
+            b.google_books_queried,
             c.url AS cover_url
           FROM books b
           LEFT JOIN covers c ON c.isbn = b.isbn AND b.isbn IS NOT NULL AND b.isbn <> ''
@@ -533,14 +548,35 @@ export const enrichMissingIsbns = async ({
             }
           }
         }
+
+        if (candidateIsbns.length > 0) {
+          try {
+            const coversRes = await queryFn(
+              'SELECT isbn, url FROM covers WHERE isbn = ANY($1)',
+              [candidateIsbns],
+            )
+            const coverRows = Array.isArray(coversRes) ? coversRes : []
+            for (const c of coverRows) {
+              const clean = cleanIsbn(c.isbn)
+              if (clean && c.url) {
+                existingCoversByIsbn.set(clean, c.url)
+                const res = resolveBookIsbns({ isbn: clean })
+                if (res.isbn13) existingCoversByIsbn.set(res.isbn13, c.url)
+                if (res.isbn10) existingCoversByIsbn.set(res.isbn10, c.url)
+              }
+            }
+          } catch {
+            // Ignore if covers query fails
+          }
+        }
       } catch (dbErr) {
         console.warn('[uploadcsv] Failed to check existing books in database:', dbErr?.message)
       }
     }
   }
 
-  // Filter targets: only query Google for books that are NOT already in the database
-  const targets = []
+  // Filter remaining candidates: check database matches first
+  const remainingCandidates = []
   for (const candidate of candidateRows) {
     const { row, book, title, author, isbn: rawIsbn, missingIsbn, missingPages, missingYear } = candidate
     const cleanCurIsbn = cleanIsbn(rawIsbn)
@@ -595,29 +631,107 @@ export const enrichMissingIsbns = async ({
         }
       }
 
-      if (existingDbBook.cover_url) {
+      if (existingDbBook.google_books_queried !== undefined && existingDbBook.google_books_queried !== null) {
+        row.google_books_queried = Boolean(existingDbBook.google_books_queried)
         if (book) {
-          book.imageUrl = existingDbBook.cover_url
+          book.googleBooksQueried = Boolean(existingDbBook.google_books_queried)
         }
+      }
+
+      const existingCover =
+        existingDbBook.cover_url ||
+        (cleanCurIsbn && existingCoversByIsbn.get(cleanCurIsbn)) ||
+        (existingDbBook.isbn && existingCoversByIsbn.get(cleanIsbn(existingDbBook.isbn))) ||
+        null
+
+      if (existingCover) {
+        if (book) {
+          book.imageUrl = existingCover
+        }
+        row.imageUrl = existingCover
         const candidateIsbns = [row.isbn, existingDbBook.isbn, book?.isbn, book?.isbn13, book?.isbn10].filter(Boolean)
         for (const cand of candidateIsbns) {
           const res = resolveBookIsbns({ isbn: cand })
-          if (res.isbn13) discoveredCovers.push({ isbn: res.isbn13, url: existingDbBook.cover_url })
-          if (res.isbn10) discoveredCovers.push({ isbn: res.isbn10, url: existingDbBook.cover_url })
+          if (res.isbn13) discoveredCovers.push({ isbn: res.isbn13, url: existingCover })
+          if (res.isbn10) discoveredCovers.push({ isbn: res.isbn10, url: existingCover })
           if (!res.isbn13 && !res.isbn10 && cand) {
-            discoveredCovers.push({ isbn: cand, url: existingDbBook.cover_url })
+            discoveredCovers.push({ isbn: cand, url: existingCover })
           }
         }
 
-        // Skip querying Google Books because this book and its cover are already in the database
+        // Skip querying external sources because this book and its cover are already in the database
         continue
       }
     }
 
-    targets.push(candidate)
+    remainingCandidates.push(candidate)
   }
 
-  if (targets.length === 0) {
+  // Next, for books not in DB or without DB cover:
+  // If ISBN is present, check Open Library for a cover first.
+  // If Open Library has a cover, do NOT query Google Books (deferring description and missing fields to on-demand).
+  // If no ISBN, or Open Library has no cover, fall back to Google Books!
+  const googleBooksTargets = []
+  const openLibraryCandidates = []
+
+  for (const candidate of remainingCandidates) {
+    const curIsbn = cleanIsbn(candidate.row.isbn || candidate.isbn)
+    if (curIsbn && curIsbn.length >= 8) {
+      openLibraryCandidates.push({ ...candidate, curIsbn })
+    } else {
+      googleBooksTargets.push(candidate)
+    }
+  }
+
+  const OL_CONCURRENCY = 10
+  for (let i = 0; i < openLibraryCandidates.length; i += OL_CONCURRENCY) {
+    const batch = openLibraryCandidates.slice(i, i + OL_CONCURRENCY)
+    await Promise.all(
+      batch.map(async (candidate) => {
+        const { row, book, curIsbn } = candidate
+        try {
+          const olCoverUrl = await checkOpenLibraryCover(curIsbn, fetchFn)
+          if (olCoverUrl) {
+            if (book) {
+              book.imageUrl = olCoverUrl
+            }
+            row.imageUrl = olCoverUrl
+
+            const candidateIsbns = [
+              row.isbn,
+              book?.isbn,
+              book?.isbn13,
+              book?.isbn10,
+              curIsbn,
+            ].filter(Boolean)
+
+            for (const cand of candidateIsbns) {
+              const resIsbns = resolveBookIsbns({ isbn: cand })
+              if (resIsbns.isbn13) discoveredCovers.push({ isbn: resIsbns.isbn13, url: olCoverUrl })
+              if (resIsbns.isbn10) discoveredCovers.push({ isbn: resIsbns.isbn10, url: olCoverUrl })
+              if (!resIsbns.isbn13 && !resIsbns.isbn10 && cand) {
+                discoveredCovers.push({ isbn: cand, url: olCoverUrl })
+              }
+            }
+
+            // Cover resolved via Open Library! Do NOT query Google Books.
+            row.google_books_queried = false
+            if (book) {
+              book.googleBooksQueried = false
+            }
+            return
+          }
+        } catch {
+          // Open Library check failed
+        }
+
+        // No Open Library cover -> fall back to Google Books!
+        googleBooksTargets.push(candidate)
+      }),
+    )
+  }
+
+  if (googleBooksTargets.length === 0) {
     if (discoveredCovers.length > 0 && queryFn) {
       const seenCovers = new Set()
       for (const { isbn: coverIsbn, url } of discoveredCovers) {
@@ -635,9 +749,10 @@ export const enrichMissingIsbns = async ({
     }
     return { dbRows, books, covers: discoveredCovers }
   }
-  const CONCURRENCY = 5
-  for (let i = 0; i < targets.length; i += CONCURRENCY) {
-    const batch = targets.slice(i, i + CONCURRENCY)
+
+  const CONCURRENCY = 10
+  for (let i = 0; i < googleBooksTargets.length; i += CONCURRENCY) {
+    const batch = googleBooksTargets.slice(i, i + CONCURRENCY)
     await Promise.all(
       batch.map(async ({ row, book, title, author, isbn, missingIsbn, missingPages, missingYear }) => {
         try {
@@ -648,6 +763,10 @@ export const enrichMissingIsbns = async ({
             apiKey,
             fetchFn,
           })
+          row.google_books_queried = true
+          if (book) {
+            book.googleBooksQueried = true
+          }
           if (!result) return
 
           // 1. Fill missing ISBN if the csv does not contain it
@@ -827,18 +946,25 @@ export const extractUploadPayload = async (req) => {
   const rawContentType = String(req.headers?.['content-type'] || req.headers?.['Content-Type'] || '')
   const contentType = rawContentType.toLowerCase()
 
+  const headerAuthUserId = String(
+    req.headers?.['x-auth-user-id'] ||
+    req.headers?.['X-Auth-User-Id'] ||
+    req.authUserId ||
+    ''
+  ).trim() || null
+
   if (
     req.body &&
     typeof req.body === 'object' &&
     !Buffer.isBuffer(req.body) &&
-    (req.body.csv || req.body.file || req.body.displayName)
+    (req.body.csv || req.body.file || req.body.displayName || req.body.authUserId)
   ) {
     return {
       userId: String(req.body.userId || req.query?.userId || '').trim(),
       displayName: String(req.body.displayName || req.query?.displayName || '').trim(),
       csvText: String(req.body.csv || req.body.file || ''),
       isNewUser: Boolean(req.body.isNewUser || req.query?.isNewUser),
-      authUserId: String(req.body.authUserId || req.query?.authUserId || '').trim() || null,
+      authUserId: String(req.body.authUserId || req.query?.authUserId || '').trim() || headerAuthUserId,
     }
   }
 
@@ -851,7 +977,7 @@ export const extractUploadPayload = async (req) => {
       displayName: String(fields.displayName || req.query?.displayName || '').trim(),
       csvText: String(fields.file || fields.csv || ''),
       isNewUser: Boolean(fields.isNewUser === 'true' || fields.isNewUser === true || req.query?.isNewUser),
-      authUserId: String(fields.authUserId || req.query?.authUserId || '').trim() || null,
+      authUserId: String(fields.authUserId || req.query?.authUserId || '').trim() || headerAuthUserId,
     }
   }
 
@@ -862,7 +988,7 @@ export const extractUploadPayload = async (req) => {
       displayName: String(parsed.displayName || req.query?.displayName || '').trim(),
       csvText: String(parsed.csv || parsed.file || ''),
       isNewUser: Boolean(parsed.isNewUser || req.query?.isNewUser),
-      authUserId: String(parsed.authUserId || req.query?.authUserId || '').trim() || null,
+      authUserId: String(parsed.authUserId || req.query?.authUserId || '').trim() || headerAuthUserId,
     }
   }
 
@@ -871,7 +997,7 @@ export const extractUploadPayload = async (req) => {
     displayName: String(req.query?.displayName || '').trim(),
     csvText: rawBuffer.toString('utf8'),
     isNewUser: Boolean(req.query?.isNewUser),
-    authUserId: String(req.query?.authUserId || '').trim() || null,
+    authUserId: String(req.query?.authUserId || '').trim() || headerAuthUserId,
   }
 }
 
@@ -895,9 +1021,10 @@ export default async function handler(req, res) {
     const { userId: rawUserId, displayName, csvText, isNewUser, authUserId } =
       await extractUploadPayload(req)
 
-    if (!displayName) {
-      console.warn('[uploadcsv] 400: Display name is missing')
-      return res.status(400).json({ error: 'Display name is required.' })
+    const cleanAuthUserId = String(authUserId || '').trim()
+    if (!cleanAuthUserId) {
+      console.warn('[uploadcsv] 401: Authentication required')
+      return res.status(401).json({ error: 'Unauthorized: Authentication required.' })
     }
 
     if (!csvText || !csvText.trim()) {
@@ -932,16 +1059,19 @@ export default async function handler(req, res) {
       `${USER_ID_COOKIE_NAME}=${encodeURIComponent(userId)}; Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax`,
     )
 
-    await upsertUserInDatabase({
-      userId,
-      displayName,
-      authUserId,
-      queryFn: executeQuery,
-    })
-    await deleteUserBooksFromDatabase({
-      userId,
-      queryFn: executeQuery,
-    })
+    await Promise.all([
+      upsertUserInDatabase({
+        userId,
+        displayName,
+        authUserId: cleanAuthUserId,
+        queryFn: executeQuery,
+      }),
+      deleteUserBooksFromDatabase({
+        userId,
+        queryFn: executeQuery,
+      }),
+    ])
+
     await insertBooksIntoDatabase({
       userId,
       dbRows,
@@ -950,7 +1080,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       userId,
-      username: displayName,
+      username: displayName || '',
       count: dbRows.length,
       books,
     })
