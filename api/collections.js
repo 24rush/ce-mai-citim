@@ -422,9 +422,11 @@ export const deleteCollection = async ({ userId, collectionId, queryFn }) => {
   }
 }
 
-export const updateCollectionPrivacy = async ({
+export const updateCollection = async ({
   userId,
   collectionId,
+  title,
+  description,
   isPrivate,
   queryFn,
 }) => {
@@ -438,17 +440,53 @@ export const updateCollectionPrivacy = async ({
     throw new Error('Collection id is required.')
   }
 
-  const privateFlag = Boolean(isPrivate)
-  const executeQuery = queryFn || (await createDefaultDbQuery())
+  const updates = []
+  const values = []
+  let paramIdx = 1
+
+  if (title !== undefined) {
+    const cleanTitle = String(title || '').trim()
+    if (!cleanTitle) {
+      throw new Error('Title is required.')
+    }
+    if (cleanTitle.length > 100) {
+      throw new Error('Title cannot exceed 100 characters.')
+    }
+    updates.push(`title = $${paramIdx++}`)
+    values.push(cleanTitle)
+  }
+
+  if (description !== undefined) {
+    const cleanDescription = String(description || '').trim()
+    if (cleanDescription.length > 500) {
+      throw new Error('Description cannot exceed 500 characters.')
+    }
+    updates.push(`description = $${paramIdx++}`)
+    values.push(cleanDescription)
+  }
+
+  if (isPrivate !== undefined) {
+    updates.push(`is_private = $${paramIdx++}`)
+    values.push(Boolean(isPrivate))
+  }
+
+  if (updates.length === 0) {
+    throw new Error('No valid fields provided to update.')
+  }
+
+  updates.push('updated_at = NOW()')
+  values.push(cleanCollectionId, cleanUserId)
+
   const sql = `
     UPDATE collections
-    SET is_private = $1, updated_at = NOW()
-    WHERE collection_id = $2 AND user_id = $3
+    SET ${updates.join(', ')}
+    WHERE collection_id = $${paramIdx++} AND user_id = $${paramIdx++}
     RETURNING collection_id, user_id, title, description, is_private, created_at, updated_at;
   `.trim()
 
+  const executeQuery = queryFn || (await createDefaultDbQuery())
   const rows = await withAutoMigrate(executeQuery, () =>
-    executeQuery(sql, [privateFlag, cleanCollectionId, cleanUserId]),
+    executeQuery(sql, values),
   )
 
   if (!rows || rows.length === 0) {
@@ -459,6 +497,7 @@ export const updateCollectionPrivacy = async ({
   return {
     success: true,
     collectionId: String(row.collection_id),
+    title: row.title,
     isPrivate: Boolean(row.is_private),
     collection: {
       id: String(row.collection_id),
@@ -471,6 +510,24 @@ export const updateCollectionPrivacy = async ({
       updatedAt: row.updated_at,
     },
   }
+}
+
+export const updateCollectionPrivacy = async ({
+  userId,
+  collectionId,
+  isPrivate,
+  queryFn,
+}) => {
+  return updateCollection({ userId, collectionId, isPrivate, queryFn })
+}
+
+export const updateCollectionTitle = async ({
+  userId,
+  collectionId,
+  title,
+  queryFn,
+}) => {
+  return updateCollection({ userId, collectionId, title, queryFn })
 }
 
 export default async function handler(req, res) {
@@ -493,7 +550,7 @@ export default async function handler(req, res) {
         ? await getExploreCollections({ queryFn: executeQuery })
         : await getUserCollections({ userId, includePrivate, queryFn: executeQuery })
 
-      res.setHeader('Cache-Control', 'no-store')
+      res.setHeader('Cache-Control', 'public, s-maxage=30, stale-while-revalidate=300')
       return res.status(200).json({ success: true, collections })
     } catch (err) {
       console.error('Failed to get collections:', err)
@@ -525,6 +582,17 @@ export default async function handler(req, res) {
           userId: body.userId,
           collectionId: body.collectionId,
           isPrivate: body.isPrivate,
+          queryFn: executeQuery,
+        })
+        res.setHeader('Cache-Control', 'no-store')
+        return res.status(200).json(result)
+      }
+
+      if (action === 'update_title' || action === 'update-title' || action === 'rename') {
+        const result = await updateCollectionTitle({
+          userId: body.userId,
+          collectionId: body.collectionId,
+          title: body.title,
           queryFn: executeQuery,
         })
         res.setHeader('Cache-Control', 'no-store')
@@ -577,23 +645,27 @@ export default async function handler(req, res) {
 
     try {
       const executeQuery = req.dbQuery || (await createDefaultDbQuery())
-      const result = await updateCollectionPrivacy({
+      const result = await updateCollection({
         userId: body.userId,
         collectionId: body.collectionId,
+        title: body.title,
+        description: body.description,
         isPrivate: body.isPrivate,
         queryFn: executeQuery,
       })
       res.setHeader('Cache-Control', 'no-store')
       return res.status(200).json(result)
     } catch (err) {
-      console.error('Failed to update collection privacy:', err)
+      console.error('Failed to update collection:', err)
       const isClientError =
         err?.message?.includes('required') ||
         err?.message?.includes('8-character') ||
         err?.message?.includes('unauthorized') ||
-        err?.message?.includes('not found')
+        err?.message?.includes('not found') ||
+        err?.message?.includes('cannot exceed') ||
+        err?.message?.includes('provided')
       return res.status(isClientError ? 400 : 500).json({
-        error: err?.message || 'Failed to update collection privacy.',
+        error: err?.message || 'Failed to update collection.',
       })
     }
   }

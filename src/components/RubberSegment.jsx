@@ -15,7 +15,7 @@ const DEADZONE = 4;
 const SLOP = 10;
 const RUBBER = 0.55;
 const SIZES = {
-  sm: { height: 28, font: 12, pad: 10, min: 36 },
+  sm: { height: 28, font: 12, pad: 14, min: 36 },
   md: { height: 36, font: 13, pad: 14, min: 44 },
   lg: { height: 44, font: 14, pad: 18, min: 48 }
 };
@@ -59,6 +59,7 @@ const RubberSegment = ({
   size = 'md',
   radius = 10,
   inset = 3,
+  pad = 14,
   equalSlots = true,
   stretch = 100,
   squash = 3,
@@ -67,6 +68,7 @@ const RubberSegment = ({
   draggable = true,
   disabled = false,
   className = '',
+  style: userStyle,
   'aria-label': ariaLabel = 'Segmented control'
 }) => {
   const list = items.map(item => (typeof item === 'string' ? { value: item, label: item } : item));
@@ -131,7 +133,7 @@ const RubberSegment = ({
     if (typeof document !== 'undefined' && document.fonts) document.fonts.ready.then(measure);
     return () => observer.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listKey, size, inset, equalSlots]);
+  }, [listKey, size, inset, pad, equalSlots]);
 
   useEffect(() => {
     if (!drag.current && committed.current !== index) {
@@ -341,9 +343,10 @@ const RubberSegment = ({
         '--rs-thumb-radius': `${thumbRadius}px`,
         '--rs-h': `${preset.height}px`,
         '--rs-font': `${preset.font}px`,
-        '--rs-pad': `${preset.pad}px`,
+        '--rs-pad': typeof pad === 'number' ? `${pad}px` : (pad ? `${pad}` : `${preset.pad}px`),
         '--rs-min': `${preset.min}px`,
-        '--rs-ease-out': 'cubic-bezier(0.23, 1, 0.32, 1)'
+        '--rs-ease-out': 'cubic-bezier(0.23, 1, 0.32, 1)',
+        ...userStyle
       }}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -361,7 +364,7 @@ const RubberSegment = ({
           aria-checked={i === index}
           tabIndex={i === index ? 0 : -1}
           disabled={disabled || Boolean(item.disabled)}
-          className="inline-flex h-[calc(var(--rs-h)-var(--rs-inset)*2)] min-w-[var(--rs-min)] items-center justify-center gap-1.5 m-0 border-0 bg-transparent px-[var(--rs-pad)] py-0 rounded-[var(--rs-thumb-radius)] [font:inherit] text-[length:var(--rs-font)] font-medium leading-none whitespace-nowrap outline-none [transition:opacity_160ms_ease,transform_160ms_var(--rs-ease-out)] motion-reduce:[transition:opacity_160ms_ease] cursor-pointer [color:var(--rs-ink)] opacity-70 aria-checked:cursor-default disabled:cursor-default disabled:opacity-30 group-data-[draggable]:aria-checked:cursor-grab group-data-[held]:cursor-grabbing data-[pressed]:[transform:scale(0.96)] focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:[outline-color:var(--rs-thumb)] [@media(hover:hover)_and_(pointer:fine)]:[&[aria-checked=false]:not(:disabled):hover]:opacity-90"
+          className="inline-flex h-[calc(var(--rs-h)-var(--rs-inset)*2)] min-w-[var(--rs-min)] items-center justify-center gap-1.5 m-0 border-0 bg-transparent px-[var(--rs-pad)] py-0 rounded-[var(--rs-thumb-radius)] [font:inherit] text-[length:var(--rs-font)] font-medium leading-none whitespace-nowrap outline-none [transition:opacity_160ms_ease,transform_160ms_var(--rs-ease-out)] motion-reduce:[transition:opacity_160ms_ease] cursor-pointer [color:var(--rs-ink)] opacity-70 aria-checked:cursor-default disabled:cursor-default disabled:opacity-30 group-data-[draggable]:aria-checked:cursor-grab group-data-[held]:cursor-grabbing data-[pressed]:[transform:scale(0.96)] focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:[outline-color:var(--rs-thumb)] [@media(hover:hover)_and_(pointer:fine)]:[&[aria-checked=false]:not(:disabled):hover]:opacity-90 [&_svg]:shrink-0"
           onPointerDown={e => handlePointerDown(e, i)}
           onKeyDown={handleKeyDown}
         >
@@ -377,7 +380,7 @@ const RubberSegment = ({
         {list.map(item => (
           <span
             key={item.value}
-            className="inline-flex h-[calc(var(--rs-h)-var(--rs-inset)*2)] min-w-[var(--rs-min)] items-center justify-center gap-1.5 m-0 border-0 bg-transparent px-[var(--rs-pad)] py-0 rounded-[var(--rs-thumb-radius)] [font:inherit] text-[length:var(--rs-font)] font-medium leading-none whitespace-nowrap outline-none [transition:opacity_160ms_ease,transform_160ms_var(--rs-ease-out)] motion-reduce:[transition:opacity_160ms_ease] cursor-default [color:inherit]"
+            className="inline-flex h-[calc(var(--rs-h)-var(--rs-inset)*2)] min-w-[var(--rs-min)] items-center justify-center gap-1.5 m-0 border-0 bg-transparent px-[var(--rs-pad)] py-0 rounded-[var(--rs-thumb-radius)] [font:inherit] text-[length:var(--rs-font)] font-medium leading-none whitespace-nowrap outline-none [transition:opacity_160ms_ease,transform_160ms_var(--rs-ease-out)] motion-reduce:[transition:opacity_160ms_ease] cursor-default [color:inherit] [&_svg]:shrink-0"
           >
             {item.icon}
             {item.label}

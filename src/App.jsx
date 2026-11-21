@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
-import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FolderPlus, Globe, Library, Loader2, Lock, LogOut, Plus, QrCode, Save, Search, Share2, Star, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
+import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FileText, Globe, Library, Loader2, Lock, LogOut, Pencil, Plus, QrCode, Save, Search, Share2, Star, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
 import PeekRating from './components/PeekRating'
 import {
   buildBookShareUrl,
@@ -9,6 +9,7 @@ import {
   getRouteStateFromPath,
   getUserIdFromCookie,
   isRootPath,
+  matchesBookSearch,
   matchesShelf,
   normalizeCsvBook,
   parseGoodreadsCsv,
@@ -30,9 +31,9 @@ const SHELF_OPTIONS = [
 ]
 
 const TOP_NAV_OPTIONS = [
-  { id: 'shelves', label: 'Rafturi', icon: <BookOpen size={16} strokeWidth={2.2} /> },
-  { id: 'explore', label: 'Explorează', icon: <Compass size={16} strokeWidth={2.2} /> },
-  { id: 'collections', label: 'Colecții', icon: <Library size={16} strokeWidth={2.2} /> },
+  { id: 'shelves', label: 'Rafturi', icon: <BookOpen size={16} strokeWidth={2.2} className="shrink-0" /> },
+  { id: 'explore', label: 'Descoperă', icon: <Compass size={16} strokeWidth={2.2} className="shrink-0" /> },
+  { id: 'collections', label: 'Colecții', icon: <Library size={16} strokeWidth={2.2} className="shrink-0" /> },
 ]
 
 const COLLECTION_FILTER_OPTIONS = [
@@ -78,7 +79,7 @@ const getBookSortOptions = (shelfId) => {
 }
 
 const fetchBooksFromApi = async (apiUrl, signal) => {
-  const response = await fetch(apiUrl, { signal })
+  const response = await fetch(apiUrl, { signal, cache: 'no-cache' })
 
   if (!response.ok) {
     throw new Error(`API request failed with status ${response.status}`)
@@ -251,12 +252,117 @@ function CollectionRow({
   onTogglePrivacy,
   isTogglingPrivacy,
   onBookClick,
+  onUpdateTitle,
 }) {
   const rowContainerRef = useRef(null)
   const rowCarouselRef = useRef(null)
   const rowDragRef = useRef({ isDown: false, active: false, pointerId: null, startX: 0, startY: 0, scrollLeft: 0 })
   const rowTapMovedRef = useRef(false)
   const [isRowInView, setIsRowInView] = useState(false)
+
+  const [isEditingTitle, setIsEditingTitle] = useState(false)
+  const [titleInput, setTitleInput] = useState(collection.title || '')
+  const [isSavingTitle, setIsSavingTitle] = useState(false)
+  const titleInputRef = useRef(null)
+  const titleLineRef = useRef(null)
+
+  const [showDeletePopup, setShowDeletePopup] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+
+  useEffect(() => {
+    if (!isEditingTitle) return undefined
+
+    const handlePointerDownOutside = (event) => {
+      if (titleLineRef.current && !titleLineRef.current.contains(event.target)) {
+        setTitleInput(collection.title || '')
+        setIsEditingTitle(false)
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDownOutside)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDownOutside)
+    }
+  }, [isEditingTitle, collection.title])
+
+  useEffect(() => {
+    if (!showDeletePopup) return undefined
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setShowDeletePopup(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [showDeletePopup])
+
+  const handleConfirmDelete = async () => {
+    setIsDeleting(true)
+    try {
+      await onDeleteCollection?.(collection)
+    } finally {
+      setIsDeleting(false)
+      setShowDeletePopup(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!isEditingTitle) {
+      setTitleInput(collection.title || '')
+    }
+  }, [collection.title, isEditingTitle])
+
+  useEffect(() => {
+    if (isEditingTitle && titleInputRef.current) {
+      titleInputRef.current.focus()
+      titleInputRef.current.select()
+    }
+  }, [isEditingTitle])
+
+  const handleStartEditTitle = (e) => {
+    e?.preventDefault?.()
+    e?.stopPropagation?.()
+    setTitleInput(collection.title || '')
+    setIsEditingTitle(true)
+  }
+
+  const handleSaveTitle = async (e) => {
+    e?.preventDefault?.()
+    e?.stopPropagation?.()
+    const trimmed = titleInput.trim()
+    if (!trimmed) {
+      setTitleInput(collection.title || '')
+      setIsEditingTitle(false)
+      return
+    }
+    if (trimmed === collection.title) {
+      setIsEditingTitle(false)
+      return
+    }
+    setIsSavingTitle(true)
+    try {
+      const ok = await onUpdateTitle?.(collection, trimmed)
+      if (ok !== false) {
+        setIsEditingTitle(false)
+      }
+    } catch {
+      // ignore
+    } finally {
+      setIsSavingTitle(false)
+    }
+  }
+
+  const handleTitleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      handleSaveTitle()
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      setTitleInput(collection.title || '')
+      setIsEditingTitle(false)
+    }
+  }
 
   const normalizedBooks = useMemo(
     () => (Array.isArray(collection.books) ? collection.books.map((b, idx) => normalizeCsvBook(b, idx)) : []),
@@ -348,47 +454,96 @@ function CollectionRow({
     <div ref={rowContainerRef} className="collection-row-card">
       <div className="collection-row-header">
         <div className="collection-row-title-group">
-          <h3 className="collection-row-title">{collection.title}</h3>
-          {isOwner ? (
-            <button
-              type="button"
-              className={`collection-row-privacy-btn ${collection.isPrivate ? 'is-private' : 'is-public'}`}
-              onClick={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                onTogglePrivacy?.(collection)
-              }}
-              disabled={isTogglingPrivacy}
-              title={
-                collection.isPrivate
-                  ? 'Colecție privată. Apasă pentru a o face publică'
-                  : 'Colecție publică. Apasă pentru a o face privată'
-              }
-              aria-label={
-                collection.isPrivate
-                  ? 'Colecție privată. Schimbă în publică'
-                  : 'Colecție publică. Schimbă în privată'
-              }
-            >
-              {collection.isPrivate ? <Lock size={12} /> : <Globe size={12} />}
-              <span>{collection.isPrivate ? 'Privată' : 'Publică'}</span>
-            </button>
-          ) : collection.isPrivate ? (
-            <span className="collection-row-private-badge" title="Vizibilă doar pentru tine">
-              <Lock size={12} />
-              <span>Privată</span>
-            </span>
-          ) : null}
-          {showCreator && collection.username ? (
-            <button
-              type="button"
-              className="collection-row-creator-btn"
-              onClick={() => onSelectCreator?.(collection.userId)}
-              title={`Vezi profilul lui ${collection.username}`}
-            >
-              de <span>{collection.username}</span>
-            </button>
-          ) : null}
+          <div ref={titleLineRef} className="collection-row-title-line">
+            {isEditingTitle ? (
+              <input
+                ref={titleInputRef}
+                type="text"
+                className="collection-row-title-input"
+                value={titleInput}
+                onChange={(e) => setTitleInput(e.target.value)}
+                onKeyDown={handleTitleKeyDown}
+                disabled={isSavingTitle}
+                placeholder="Titlu colecție..."
+                maxLength={100}
+                aria-label="Titlu colecție"
+              />
+            ) : (
+              <h3 className="collection-row-title">{collection.title}</h3>
+            )}
+            {isOwner ? (
+              <button
+                type="button"
+                className={`collection-edit-title-btn ${isEditingTitle ? 'is-editing' : ''}`}
+                onClick={isEditingTitle ? handleSaveTitle : handleStartEditTitle}
+                disabled={isSavingTitle}
+                title={isEditingTitle ? 'Salvează titlul' : 'Editează titlul'}
+                aria-label={isEditingTitle ? 'Salvează titlul' : 'Editează titlul'}
+              >
+                {isSavingTitle ? (
+                  <Loader2 size={13} className="spin" />
+                ) : isEditingTitle ? (
+                  <Save size={14} />
+                ) : (
+                  <Pencil size={13} />
+                )}
+              </button>
+            ) : null}
+          </div>
+          <div className="collection-row-meta-line">
+            {isOwner ? (
+              <button
+                type="button"
+                className={`collection-row-privacy-btn ${collection.isPrivate ? 'is-private' : 'is-public'}`}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  onTogglePrivacy?.(collection)
+                }}
+                disabled={isTogglingPrivacy}
+                title={
+                  collection.isPrivate
+                    ? 'Colecție privată. Apasă pentru a o face publică'
+                    : 'Colecție publică. Apasă pentru a o face privată'
+                }
+                aria-label={
+                  collection.isPrivate
+                    ? 'Colecție privată. Schimbă în publică'
+                    : 'Colecție publică. Schimbă în privată'
+                }
+              >
+                {collection.isPrivate ? <Lock size={12} /> : <Globe size={12} />}
+                <span>{collection.isPrivate ? 'Privată' : 'Publică'}</span>
+              </button>
+            ) : collection.isPrivate ? (
+              <span className="collection-row-private-badge" title="Vizibilă doar pentru tine">
+                <Lock size={12} />
+                <span>Privată</span>
+              </span>
+            ) : null}
+            {isOwner ? (
+              <button
+                type="button"
+                className="collection-row-delete-btn"
+                onClick={() => setShowDeletePopup(true)}
+                aria-label={`Șterge colecția ${collection.title}`}
+                title="Șterge colecția"
+              >
+                <Trash2 size={12} />
+                <span>Șterge</span>
+              </button>
+            ) : null}
+            {showCreator && !isOwner ? (
+              <button
+                type="button"
+                className="collection-row-creator-btn"
+                onClick={() => onSelectCreator?.(collection.userId)}
+                title={`Vezi profilul lui ${collection.username}`}
+              >
+                de <span>{collection.username}</span>
+              </button>
+            ) : null}
+          </div>
         </div>
 
         {isOwner ? (
@@ -401,18 +556,50 @@ function CollectionRow({
             >
               <Plus size={15} />
             </button>
-            <button
-              type="button"
-              className="collection-delete-btn"
-              onClick={() => onDeleteCollection?.(collection)}
-              aria-label={`Șterge colecția ${collection.title}`}
-              title="Șterge colecția"
-            >
-              <Trash2 size={15} />
-            </button>
           </div>
         ) : null}
       </div>
+
+      {showDeletePopup && (
+        <div
+          className="collection-delete-confirm-overlay"
+          onClick={() => !isDeleting && setShowDeletePopup(false)}
+          role="presentation"
+        >
+          <div
+            className="collection-delete-confirm-card"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`delete-title-${collection.id}`}
+          >
+            <div className="collection-delete-confirm-icon-wrap">
+              <Trash2 size={20} />
+            </div>
+            <p className="collection-delete-confirm-desc">
+              Ești sigur că vrei să ștergi colecția <strong>„{collection.title}”</strong>?
+            </p>
+            <div className="collection-delete-confirm-btns">
+              <button
+                type="button"
+                className="collection-delete-confirm-cancel"
+                onClick={() => setShowDeletePopup(false)}
+                disabled={isDeleting}
+              >
+                Anulează
+              </button>
+              <button
+                type="button"
+                className="collection-delete-confirm-delete"
+                onClick={handleConfirmDelete}
+                disabled={isDeleting}
+              >
+                {isDeleting ? <Loader2 size={14} className="spin" /> : 'Șterge'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {collection.description ? (
         <p className="collection-row-description">{collection.description}</p>
@@ -499,6 +686,144 @@ function CollectionRow({
   )
 }
 
+function ShelfSearchInput({ searchQuery, onSearch }) {
+  const [isExpanded, setIsExpanded] = useState(Boolean(searchQuery))
+  const [localText, setLocalText] = useState(searchQuery || '')
+  const containerRef = useRef(null)
+  const inputRef = useRef(null)
+  const timerRef = useRef(null)
+
+  // Sync when parent resets search
+  useEffect(() => {
+    setLocalText(searchQuery || '')
+    if (searchQuery) {
+      setIsExpanded(true)
+    }
+  }, [searchQuery])
+
+  const handleChange = (e) => {
+    const nextVal = e.target.value
+    setLocalText(nextVal)
+
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+    }
+
+    timerRef.current = setTimeout(() => {
+      onSearch(nextVal)
+    }, 1000)
+  }
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      if (timerRef.current) {
+        clearTimeout(timerRef.current)
+      }
+      onSearch(localText)
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      if (timerRef.current) {
+        clearTimeout(timerRef.current)
+      }
+      if (localText || searchQuery) {
+        setLocalText('')
+        onSearch('')
+      } else {
+        setIsExpanded(false)
+      }
+    }
+  }
+
+  const handleClearOrClose = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+    }
+    if (localText || searchQuery) {
+      setLocalText('')
+      onSearch('')
+      inputRef.current?.focus()
+    } else {
+      setIsExpanded(false)
+    }
+  }
+
+  const handleToggle = () => {
+    if (!isExpanded) {
+      setIsExpanded(true)
+      setTimeout(() => inputRef.current?.focus(), 50)
+    } else if (!localText.trim() && !searchQuery.trim()) {
+      setIsExpanded(false)
+    } else {
+      inputRef.current?.focus()
+    }
+  }
+
+  useEffect(() => {
+    if (!isExpanded) return undefined
+
+    const handleClickOutside = (event) => {
+      if (containerRef.current && !containerRef.current.contains(event.target)) {
+        if (!localText.trim() && !searchQuery.trim()) {
+          setIsExpanded(false)
+        }
+      }
+    }
+
+    document.addEventListener('pointerdown', handleClickOutside)
+    return () => document.removeEventListener('pointerdown', handleClickOutside)
+  }, [isExpanded, localText, searchQuery])
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current)
+      }
+    }
+  }, [])
+
+  return (
+    <div
+      ref={containerRef}
+      className={`client-shelf-search ${isExpanded ? 'expanded' : ''}`}
+    >
+      <button
+        type="button"
+        className="client-shelf-search-btn"
+        onClick={handleToggle}
+        aria-label={isExpanded ? 'Căutare cărți' : 'Caută cărți'}
+        title={isExpanded ? 'Căutare cărți' : 'Caută cărți'}
+      >
+        <Search size={isExpanded ? 14 : 16} strokeWidth={2.2} />
+      </button>
+
+      {isExpanded && (
+        <input
+          ref={inputRef}
+          type="text"
+          className="client-shelf-search-input"
+          placeholder="Caută cărți..."
+          value={localText}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+        />
+      )}
+
+      {isExpanded && (
+        <button
+          type="button"
+          className="client-shelf-search-clear"
+          onClick={handleClearOrClose}
+          aria-label={localText ? 'Șterge căutarea' : 'Închide căutarea'}
+          title={localText ? 'Șterge căutarea' : 'Închide căutarea'}
+        >
+          <X size={12} strokeWidth={2.4} />
+        </button>
+      )}
+    </div>
+  )
+}
+
 function App() {
   const initialRouteState = useMemo(() => getRouteStateFromPath(window.location.pathname), [])
   const [books, setBooks] = useState([])
@@ -514,6 +839,7 @@ function App() {
   }
   const [activeAuthorFilter, setActiveAuthorFilter] = useState('all')
   const [activeBookSort, setActiveBookSort] = useState('recently-read')
+  const [bookSearchQuery, setBookSearchQuery] = useState('')
   const [currentUserId, setCurrentUserId] = useState(() => {
     if (initialRouteState.userId) return initialRouteState.userId
     if (!isSupabaseConfigured()) return getUserIdFromCookie() || ''
@@ -598,10 +924,20 @@ function App() {
 
   const [modalDragOffset, setModalDragOffset] = useState({ x: 0, y: 0 })
   const [modalSwipeExit, setModalSwipeExit] = useState(null)
+  const [isModalEntering, setIsModalEntering] = useState(false)
   const [modalToast, setModalToast] = useState('')
   const modalToastTimeoutRef = useRef(null)
   const ratingCloseTimeoutRef = useRef(null)
-  const modalPointerRef = useRef({ startX: 0, startY: 0, isDragging: false, directionLocked: null })
+  const modalPointerRef = useRef({
+    startX: 0,
+    startY: 0,
+    startTime: 0,
+    currentDx: 0,
+    currentDy: 0,
+    rafId: null,
+    isDragging: false,
+    directionLocked: null,
+  })
   const modalCardRef = useRef(null)
 
   const isUserLoggedIn = useMemo(() => {
@@ -617,8 +953,11 @@ function App() {
     }
 
     const activeUser = cookieUserId || getUserIdFromCookie()
-    if (!activeUser || !currentUserId) {
+    if (!activeUser) {
       return true
+    }
+    if (!currentUserId) {
+      return false
     }
 
     return String(activeUser) !== String(currentUserId)
@@ -627,9 +966,22 @@ function App() {
   const isOwnProfile = useMemo(() => {
     if (!isUserLoggedIn) return false
     const activeUser = cookieUserId || getUserIdFromCookie()
-    if (!activeUser || !currentUserId) return false
+    if (!activeUser) return false
+    if (!currentUserId) return true
     return String(activeUser) === String(currentUserId)
   }, [isUserLoggedIn, currentUserId, cookieUserId])
+
+  const isVisitingOtherUser = useMemo(() => {
+    if (isExploreMode || !currentUserId) return false
+    return !isOwnProfile
+  }, [isExploreMode, currentUserId, isOwnProfile])
+
+  const visibleTopNavOptions = useMemo(() => {
+    if (isVisitingOtherUser) {
+      return TOP_NAV_OPTIONS.filter((item) => item.id !== 'explore')
+    }
+    return TOP_NAV_OPTIONS
+  }, [isVisitingOtherUser])
 
   const isOwnCollectionModal = useMemo(() => {
     if (!activeModalCollection || !isUserLoggedIn) return false
@@ -656,21 +1008,28 @@ function App() {
     const publicCount = userCollections.filter((c) => !c.isPrivate).length
     const privateCount = userCollections.filter((c) => Boolean(c.isPrivate)).length
     return {
-      all: userCollections.length,
+      all: isOwnProfile ? userCollections.length : publicCount,
       public: publicCount,
       private: privateCount,
     }
-  }, [userCollections])
+  }, [userCollections, isOwnProfile])
+
+  const visibleCollectionFilterOptions = useMemo(() => {
+    if (!isOwnProfile) {
+      return COLLECTION_FILTER_OPTIONS.filter((opt) => opt.id !== 'private')
+    }
+    return COLLECTION_FILTER_OPTIONS
+  }, [isOwnProfile])
 
   const filteredUserCollections = useMemo(() => {
     if (activeCollectionFilter === 'public') {
       return userCollections.filter((c) => !c.isPrivate)
     }
     if (activeCollectionFilter === 'private') {
-      return userCollections.filter((c) => Boolean(c.isPrivate))
+      return isOwnProfile ? userCollections.filter((c) => Boolean(c.isPrivate)) : userCollections
     }
     return userCollections
-  }, [userCollections, activeCollectionFilter])
+  }, [userCollections, activeCollectionFilter, isOwnProfile])
 
   useEffect(() => {
     if (activeShelf !== 'collections' || !currentUserId) return
@@ -910,12 +1269,12 @@ function App() {
       const supabase = createClient()
       supabase.auth
         .getSession()
-        .then(({ data: { session } }) => {
+        .then(async ({ data: { session } }) => {
           const user = session?.user ?? null
           setSupabaseUser(user)
           if (user && syncedAuthUserIdRef.current !== user.id) {
             syncedAuthUserIdRef.current = user.id
-            syncUserProfileWithServer(user)
+            await syncUserProfileWithServer(user)
           }
         })
         .catch((err) => {
@@ -927,18 +1286,19 @@ function App() {
 
       const {
         data: { subscription },
-      } = supabase.auth.onAuthStateChange((event, session) => {
+      } = supabase.auth.onAuthStateChange(async (event, session) => {
         const user = session?.user ?? null
         setSupabaseUser(user)
-        setIsCheckingAuth(false)
         if (!user) {
           syncedAuthUserIdRef.current = null
+          setIsCheckingAuth(false)
           return
         }
         if (event === 'SIGNED_IN' || syncedAuthUserIdRef.current !== user.id) {
           syncedAuthUserIdRef.current = user.id
-          syncUserProfileWithServer(user, { hideModal: event === 'SIGNED_IN' })
+          await syncUserProfileWithServer(user, { hideModal: event === 'SIGNED_IN' })
         }
+        setIsCheckingAuth(false)
       })
 
       return () => {
@@ -979,16 +1339,49 @@ function App() {
     }
   }
 
+  const inAppNavCountRef = useRef(0)
+
+  useEffect(() => {
+    const raw = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('agy_app_nav_depth') : null
+    const count = raw ? parseInt(raw, 10) : 0
+    inAppNavCountRef.current = isNaN(count) ? 0 : count
+
+    const origPushState = window.history.pushState
+    window.history.pushState = function (...args) {
+      inAppNavCountRef.current += 1
+      try {
+        sessionStorage.setItem('agy_app_nav_depth', String(inAppNavCountRef.current))
+      } catch {
+        // ignore
+      }
+      return origPushState.apply(this, args)
+    }
+
+    return () => {
+      window.history.pushState = origPushState
+    }
+  }, [])
+
   useEffect(() => {
     const syncRouteState = () => {
+      inAppNavCountRef.current = Math.max(0, inAppNavCountRef.current - 1)
+      try {
+        sessionStorage.setItem('agy_app_nav_depth', String(inAppNavCountRef.current))
+      } catch {
+        // ignore
+      }
+
       const { userId, shelf, bookId } = getRouteStateFromPath(window.location.pathname)
 
       if (isRootPath(window.location.pathname) || !userId) {
         setIsExploreMode(true)
         setRequestedBookId('')
         setSelectedBook(null)
-        if (!isUserLoggedIn) {
-          setCurrentUserId('')
+        const ownId = cookieUserId || getUserIdFromCookie() || ''
+        setCurrentUserId(ownId)
+        if (!ownId) {
+          setUsername('')
+          setBooks([])
         }
         return
       }
@@ -1004,25 +1397,30 @@ function App() {
   }, [cookieUserId, isUserLoggedIn])
 
   useEffect(() => {
-    if (!currentUserId) {
-      loadedUserIdRef.current = null
-      setBooks([])
-      setIsLoading(false)
-      if (!supabaseUserRef.current) {
-        setUsername('')
+    if (!currentUserId || isExploreMode) {
+      if (!currentUserId) {
+        loadedUserIdRef.current = null
+        setBooks([])
+        setIsLoading(false)
+        if (!supabaseUserRef.current) {
+          setUsername('')
+        }
+      } else if (isExploreMode) {
+        setIsLoading(false)
       }
       return undefined
     }
 
     const controller = new AbortController()
     const resolvedUserId = currentUserId
-    const apiUrl = buildGoodreadsApiUrl(resolvedUserId)
+    const apiUrl = `${buildGoodreadsApiUrl(resolvedUserId)}${booksFetchTrigger ? `?t=${Date.now()}` : ''}`
     const isSwitchingUser = loadedUserIdRef.current !== resolvedUserId
 
     const loadBooks = async () => {
       try {
         if (isSwitchingUser) {
           setIsLoading(true)
+          setUsername('')
         }
         setError('')
         const { books: apiBooks, username: apiUsername, description: apiDescription } = await fetchBooksFromApi(apiUrl, controller.signal)
@@ -1056,7 +1454,7 @@ function App() {
     return () => {
       controller.abort()
     }
-  }, [currentUserId, booksFetchTrigger])
+  }, [currentUserId, isExploreMode, booksFetchTrigger])
 
   const prevSortShelfRef = useRef(activeShelf)
 
@@ -1287,15 +1685,33 @@ function App() {
 
   const shelfCounts = useMemo(() => {
     const counts = {}
+    const hasSearch = Boolean(bookSearchQuery.trim())
     SHELF_OPTIONS.forEach((shelf) => {
-      counts[shelf.id] = books.filter((book) => matchesShelf(book, shelf.id)).length
+      counts[shelf.id] = books.filter((book) => {
+        if (!matchesShelf(book, shelf.id)) return false
+        if (hasSearch && !matchesBookSearch(book, bookSearchQuery)) return false
+        return true
+      }).length
     })
     return counts
-  }, [books])
+  }, [books, bookSearchQuery])
 
-  const shelfBooks = useMemo(() => {
+  const totalShelfBooks = useMemo(() => {
     return books.filter((book) => matchesShelf(book, activeShelf))
   }, [books, activeShelf])
+
+  const shelfBooks = useMemo(() => {
+    if (!bookSearchQuery.trim()) {
+      return totalShelfBooks
+    }
+    return totalShelfBooks.filter((book) => matchesBookSearch(book, bookSearchQuery))
+  }, [totalShelfBooks, bookSearchQuery])
+
+  useEffect(() => {
+    if (isExploreMode || activeShelf === 'collections') {
+      setBookSearchQuery('')
+    }
+  }, [isExploreMode, activeShelf])
 
   const authorOptions = useMemo(() => {
     const counts = new Map()
@@ -1384,7 +1800,7 @@ function App() {
       left: 0,
       behavior: 'auto',
     })
-  }, [activeShelf, currentUserId])
+  }, [activeShelf, currentUserId, bookSearchQuery, activeAuthorFilter, activeBookSort])
 
   const renderStars = (rating) => {
     const filledStars = Math.round(rating || 0)
@@ -1648,6 +2064,75 @@ function App() {
     }
   }
 
+  const handleUpdateCollectionTitle = async (collection, newTitle) => {
+    const activeUser = cookieUserId || getUserIdFromCookie()
+    if (!collection?.id || !activeUser) return false
+
+    const collectionId = String(collection.id)
+    const cleanTitle = String(newTitle || '').trim()
+    if (!cleanTitle || cleanTitle === collection.title) {
+      return true
+    }
+
+    const previousTitle = collection.title
+
+    // Optimistic update
+    const updateTitleInList = (list) =>
+      list.map((c) =>
+        String(c.id) === collectionId ? { ...c, title: cleanTitle } : c,
+      )
+
+    setUserCollections(updateTitleInList)
+    setExploreCollections(updateTitleInList)
+    setActiveModalCollection((prev) =>
+      prev && String(prev.id) === collectionId ? { ...prev, title: cleanTitle } : prev,
+    )
+
+    try {
+      const response = await fetch('/api/collections', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: activeUser,
+          collectionId,
+          title: cleanTitle,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to update collection title: status ${response.status}`)
+      }
+
+      const data = await response.json()
+      if (data?.collection?.title) {
+        const confirmedTitle = data.collection.title
+        const confirmTitleInList = (list) =>
+          list.map((c) =>
+            String(c.id) === collectionId ? { ...c, title: confirmedTitle } : c,
+          )
+        setUserCollections(confirmTitleInList)
+        setExploreCollections(confirmTitleInList)
+        setActiveModalCollection((prev) =>
+          prev && String(prev.id) === collectionId ? { ...prev, title: confirmedTitle } : prev,
+        )
+      }
+      return true
+    } catch (err) {
+      console.error('Error updating collection title:', err)
+      // Revert optimistic update
+      const revertTitleInList = (list) =>
+        list.map((c) =>
+          String(c.id) === collectionId ? { ...c, title: previousTitle } : c,
+        )
+      setUserCollections(revertTitleInList)
+      setExploreCollections(revertTitleInList)
+      setActiveModalCollection((prev) =>
+        prev && String(prev.id) === collectionId ? { ...prev, title: previousTitle } : prev,
+      )
+      return false
+    }
+  }
+
   const handleOpenAddBookForCollection = (collection) => {
     setTargetCollectionForSearch(collection)
     setSearchError('')
@@ -1790,19 +2275,31 @@ function App() {
     setSelectedBook(null)
     setActiveAuthorFilter('all')
 
-    if (!isUserLoggedIn) {
-      setCurrentUserId('')
+    const ownId = cookieUserId || getUserIdFromCookie() || ''
+    setCurrentUserId(ownId)
+    if (!ownId) {
       setUsername('')
       setBooks([])
-      window.history.pushState({}, '', '/')
-      return
-    }
-
-    const loggedInId = cookieUserId || getUserIdFromCookie() || currentUserId
-    if (loggedInId) {
-      setCurrentUserId(String(loggedInId))
     }
     window.history.pushState({}, '', '/')
+  }
+
+  const handleBackNavigation = () => {
+    setSelectedBook(null)
+    setActiveModalCollection(null)
+    setRequestedBookId('')
+
+    const hasInternalReferrer =
+      typeof document !== 'undefined' &&
+      Boolean(document.referrer && document.referrer.startsWith(window.location.origin))
+
+    const canGoBack = (inAppNavCountRef.current > 0 || hasInternalReferrer) && window.history.length > 1
+
+    if (canGoBack) {
+      window.history.back()
+    } else {
+      handleHeaderClick()
+    }
   }
 
   const handleSaveBookToShelf = async (shelfToSave = targetShelf) => {
@@ -1855,18 +2352,78 @@ function App() {
       } else {
         setShowRatingPopup(false)
       }
-      setUserShelvesByBookId((prev) => ({
-        ...prev,
-        [bookId]: {
+      const todayFormatted =
+        data.dateRead ||
+        (savedShelfName === 'read' ? new Date().toISOString().slice(0, 10).replace(/-/g, '/') : '')
+      setUserShelvesByBookId((prev) => {
+        const entry = {
           ...(prev[bookId] || {}),
           bookId,
           shelf: savedShelfName,
           title: selectedBook.title,
           author: selectedBook.author,
           isbn: selectedBook.isbn,
-        },
-      }))
-      if (cookieUserId && currentUserId === cookieUserId) {
+          dateRead: todayFormatted,
+        }
+        const next = {
+          ...prev,
+          [bookId]: entry,
+        }
+        if (selectedBook.id && String(selectedBook.id) !== bookId) {
+          next[String(selectedBook.id)] = entry
+        }
+        return next
+      })
+      setBooks((prevBooks) => {
+        const bookExists = prevBooks.some(
+          (b) =>
+            String(b.bookId || '') === bookId ||
+            String(b.id || '') === bookId ||
+            (selectedBook.id && String(b.id) === String(selectedBook.id))
+        )
+        if (bookExists) {
+          return prevBooks.map((b) => {
+            const isMatch =
+              String(b.bookId || '') === bookId ||
+              String(b.id || '') === bookId ||
+              (selectedBook.id && String(b.id) === String(selectedBook.id))
+            return isMatch
+              ? {
+                  ...b,
+                  bookshelves: savedShelfName,
+                  readAt: todayFormatted,
+                  'Date Read': todayFormatted,
+                }
+              : b
+          })
+        }
+        return [
+          {
+            ...selectedBook,
+            id: selectedBook.id || bookId,
+            bookId,
+            bookshelves: savedShelfName,
+            readAt: todayFormatted,
+            'Date Read': todayFormatted,
+          },
+          ...prevBooks,
+        ]
+      })
+      setSelectedBook((prev) => {
+        if (!prev) return prev
+        const isMatch =
+          String(prev.bookId || '') === bookId ||
+          String(prev.id || '') === bookId ||
+          (selectedBook.id && String(prev.id) === String(selectedBook.id))
+        if (!isMatch) return prev
+        return {
+          ...prev,
+          bookshelves: savedShelfName,
+          readAt: todayFormatted,
+          'Date Read': todayFormatted,
+        }
+      })
+      if (cookieUserId) {
         setBooksFetchTrigger((prev) => prev + 1)
       }
     } catch (err) {
@@ -2061,9 +2618,33 @@ function App() {
         if (loggedInUserBook?.bookId) {
           delete next[loggedInUserBook.bookId]
         }
+        if (selectedBook.id) {
+          delete next[String(selectedBook.id)]
+        }
         return next
       })
-      if (cookieUserId && currentUserId === cookieUserId) {
+      setBooks((prevBooks) =>
+        prevBooks.filter(
+          (b) =>
+            String(b.bookId || '') !== bookId &&
+            String(b.id || '') !== bookId &&
+            !(selectedBook.id && String(b.id) === String(selectedBook.id))
+        )
+      )
+      setSelectedBook((prev) =>
+        prev &&
+        (String(prev.bookId || '') === bookId ||
+          String(prev.id || '') === bookId ||
+          (selectedBook.id && String(prev.id) === String(selectedBook.id)))
+          ? {
+              ...prev,
+              bookshelves: '',
+              readAt: '',
+              'Date Read': '',
+            }
+          : prev
+      )
+      if (cookieUserId) {
         setBooksFetchTrigger((prev) => prev + 1)
       }
     } catch (err) {
@@ -2168,6 +2749,32 @@ function App() {
     setShelfDropdownOpen(false)
   }
 
+  // Preload and decode images for upcoming books so swiping feels instant with zero lag
+  useEffect(() => {
+    if (!selectedBook || !modalBookList || modalBookList.length === 0) return
+
+    const curIdx = modalBookList.findIndex(
+      (b) => String(b.bookId || b.id) === String(selectedBook.bookId || selectedBook.id)
+    )
+    if (curIdx === -1) return
+
+    // Preload next 3 books and previous 1 book
+    const indicesToPreload = [curIdx + 1, curIdx + 2, curIdx + 3, curIdx - 1]
+    const urls = indicesToPreload
+      .map((idx) => modalBookList[idx]?.imageUrl)
+      .filter((url) => Boolean(url && typeof url === 'string'))
+
+    urls.forEach((url) => {
+      const img = new Image()
+      img.src = url
+      if (typeof img.decode === 'function') {
+        img.decode().catch(() => {
+          // Ignore decode errors if unsupported or network fails
+        })
+      }
+    })
+  }, [selectedBook, modalBookList])
+
   const handleTriggerModalSwipe = (direction) => {
     if (modalSwipeExit || !selectedBook) return
 
@@ -2190,7 +2797,9 @@ function App() {
       handleJumpBook(1, { saveToRead: shouldSave })
       setModalDragOffset({ x: 0, y: 0 })
       setModalSwipeExit(null)
-    }, 220)
+      setIsModalEntering(true)
+      setTimeout(() => setIsModalEntering(false), 160)
+    }, 150)
   }
 
   const handleModalPointerDown = (event) => {
@@ -2201,6 +2810,10 @@ function App() {
     modalPointerRef.current = {
       startX: event.clientX,
       startY: event.clientY,
+      startTime: Date.now(),
+      currentDx: 0,
+      currentDy: 0,
+      rafId: null,
       isDragging: true,
       directionLocked: null,
     }
@@ -2228,13 +2841,31 @@ function App() {
     }
 
     if (modalPointerRef.current.directionLocked === 'horizontal') {
-      setModalDragOffset({ x: dx, y: dy * 0.15 })
+      modalPointerRef.current.currentDx = dx
+      modalPointerRef.current.currentDy = dy
+
+      if (!modalPointerRef.current.rafId) {
+        modalPointerRef.current.rafId = requestAnimationFrame(() => {
+          modalPointerRef.current.rafId = null
+          if (modalPointerRef.current.isDragging) {
+            setModalDragOffset({
+              x: modalPointerRef.current.currentDx,
+              y: modalPointerRef.current.currentDy * 0.15,
+            })
+          }
+        })
+      }
     }
   }
 
   const handleModalPointerUp = (event) => {
     if (!modalPointerRef.current.isDragging) return
     modalPointerRef.current.isDragging = false
+
+    if (modalPointerRef.current.rafId) {
+      cancelAnimationFrame(modalPointerRef.current.rafId)
+      modalPointerRef.current.rafId = null
+    }
 
     if (modalCardRef.current && typeof modalCardRef.current.releasePointerCapture === 'function') {
       try {
@@ -2245,10 +2876,17 @@ function App() {
     }
 
     if (modalPointerRef.current.directionLocked === 'horizontal') {
-      const dx = modalDragOffset.x
-      if (dx > 75) {
+      const dx = typeof modalPointerRef.current.currentDx === 'number'
+        ? modalPointerRef.current.currentDx
+        : modalDragOffset.x
+      const elapsed = Math.max(1, Date.now() - (modalPointerRef.current.startTime || Date.now()))
+      const velocity = Math.abs(dx) / elapsed
+      const isFlick = velocity > 0.35 && Math.abs(dx) > 35
+      const isLongDrag = Math.abs(dx) > 65
+
+      if ((isFlick && dx > 0) || (isLongDrag && dx > 0)) {
         handleTriggerModalSwipe('right')
-      } else if (dx < -75) {
+      } else if ((isFlick && dx < 0) || (isLongDrag && dx < 0)) {
         handleTriggerModalSwipe('left')
       } else {
         setModalDragOffset({ x: 0, y: 0 })
@@ -2299,19 +2937,19 @@ function App() {
   const modalRotation = useMemo(() => {
     if (modalSwipeExit === 'right') return 16
     if (modalSwipeExit === 'left') return -16
-    return Math.max(-14, Math.min(14, modalDragOffset.x * 0.04))
+    return Math.max(-14, Math.min(14, modalDragOffset.x * 0.045))
   }, [modalDragOffset.x, modalSwipeExit])
 
   const modalRightStampOpacity = useMemo(() => {
     if (modalSwipeExit === 'right') return 1
     if (modalSwipeExit === 'left') return 0
-    return Math.max(0, Math.min(1, modalDragOffset.x / 75))
+    return Math.max(0, Math.min(1, modalDragOffset.x / 60))
   }, [modalDragOffset.x, modalSwipeExit])
 
   const modalLeftStampOpacity = useMemo(() => {
     if (modalSwipeExit === 'left') return 1
     if (modalSwipeExit === 'right') return 0
-    return Math.max(0, Math.min(1, -modalDragOffset.x / 75))
+    return Math.max(0, Math.min(1, -modalDragOffset.x / 60))
   }, [modalDragOffset.x, modalSwipeExit])
 
   const shouldShowCarouselNavigation = Boolean(currentUserId || username)
@@ -2638,23 +3276,26 @@ function App() {
       }
 
       const carousel = carouselRef.current
-      const scrollLeft = carousel.scrollLeft
-      const clientWidth = carousel.clientWidth
-      const carouselCenter = clientWidth / 2
-      const maxDistance = clientWidth * 0.72
+      const carouselRect = carousel.getBoundingClientRect()
+      if (carouselRect.width <= 0) {
+        return
+      }
+
+      const carouselCenter = carouselRect.left + carouselRect.width / 2
+      const maxDistance = carouselRect.width * 0.72
+      const minBound = carouselRect.left - 200
+      const maxBound = carouselRect.right + 200
       const cards = carousel.querySelectorAll('.book-card')
 
-      // Phase 1: Pure reads - calculate transform values
+      // Phase 1: Pure reads - calculate transform values using robust viewport coordinates
       const updates = []
 
       for (let i = 0; i < cards.length; i += 1) {
         const card = cards[i]
-        const cardWidth = card.offsetWidth || 190
-        const relLeft = card.offsetLeft - scrollLeft
-        const relRight = relLeft + cardWidth
+        const cardRect = card.getBoundingClientRect()
 
         // If card is outside the active focus zone, clear custom property if it had one
-        if (relRight < -150 || relLeft > clientWidth + 150) {
+        if (cardRect.right < minBound || cardRect.left > maxBound) {
           if (card.dataset.customized === '1') {
             card.style.removeProperty('--card-scale')
             card.style.removeProperty('--card-translate-y')
@@ -2664,7 +3305,7 @@ function App() {
           continue
         }
 
-        const cardCenter = relLeft + cardWidth / 2
+        const cardCenter = cardRect.left + cardRect.width / 2
         const distanceFromCenter = Math.abs(cardCenter - carouselCenter)
         const ratio = Math.max(0, 1 - distanceFromCenter / maxDistance)
         const scale = (0.85 + ratio * 0.28).toFixed(3)
@@ -2686,7 +3327,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (!carouselRef.current || visibleBooks.length === 0) {
+    if (!carouselRef.current || visibleBooks.length === 0 || isExploreMode || activeShelf === 'collections') {
       return undefined
     }
 
@@ -2708,15 +3349,42 @@ function App() {
     carousel.addEventListener('scroll', handleScroll, { passive: true })
     window.addEventListener('resize', handleCarouselResize)
 
+    let resizeObserver
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        syncBookCoverFocus()
+      })
+      resizeObserver.observe(carousel)
+    }
+
     return () => {
       carousel.removeEventListener('scroll', handleScroll)
       window.removeEventListener('resize', handleCarouselResize)
+      if (resizeObserver) {
+        resizeObserver.disconnect()
+      }
       if (rafIdRef.current) {
         cancelAnimationFrame(rafIdRef.current)
         rafIdRef.current = null
       }
     }
-  }, [isLoading, visibleBooks.length, activeShelf, activeAuthorFilter, activeBookSort])
+  }, [isLoading, isExploreMode, visibleBooks, activeShelf, activeAuthorFilter, activeBookSort])
+
+  const profileUserHeaderName =
+    displayNameInput.trim() ||
+    username ||
+    supabaseUser?.user_metadata?.full_name ||
+    supabaseUser?.user_metadata?.name ||
+    supabaseUser?.user_metadata?.display_name ||
+    supabaseUser?.email?.split('@')[0] ||
+    ''
+
+  const loggedInUserName =
+    (!isVisitingOtherUser && (displayNameInput.trim() || username)) ||
+    (!isVisitingOtherUser && supabaseUser?.user_metadata?.full_name) ||
+    (!isVisitingOtherUser && supabaseUser?.user_metadata?.name) ||
+    (!isVisitingOtherUser && supabaseUser?.user_metadata?.display_name) ||
+    ''
 
   return (
     <div style={{ position: 'relative', minHeight: '100vh', width: '100%', overflowX: 'hidden' }}>
@@ -2733,11 +3401,15 @@ function App() {
             }}
             role="button"
             tabIndex={0}
-            title="Mergi la pagina ta principală"
+            title="Mergi la pagina principală"
           >
-            {isUserLoggedIn && username ? (
+            {!isCheckingAuth && isVisitingOtherUser && username ? (
               <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
                 Ce mai citește <span className="text-violet-300">{username}</span>
+              </h1>
+            ) : !isCheckingAuth && !isVisitingOtherUser && isUserLoggedIn && loggedInUserName ? (
+              <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
+                Ce mai citește <span className="text-violet-300">{loggedInUserName}</span>
               </h1>
             ) : (
               <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
@@ -2746,53 +3418,76 @@ function App() {
             )}
           </div>
 
-          {isUserLoggedIn && yearlySummary.count > 5 && yearlySummary.totalPages > 0 ? (
+          {!isExploreMode && yearlySummary.count > 5 && yearlySummary.totalPages > 0 ? (
             <div className="reading-summary book-detail-label" aria-live="polite">
               <span>{yearlySummary.count} cărți citite în 2026</span>
               <span>// {yearlySummary.totalPages.toLocaleString()} pagini</span>
             </div>
-          ) : null
-          }
+          ) : null}
 
           <div className="shelf-pills" aria-label="Book shelves">
             <RubberSegment
-              items={TOP_NAV_OPTIONS.map((item) => ({
-                value: item.id,
-                label: item.label,
-                icon: item.icon,
-              }))}
+              key={`top-nav-${isUserLoggedIn}-${isVisitingOtherUser}`}
+              pad={14}
+              items={visibleTopNavOptions.map((item) => {
+                const isLocked = isExploreMode && !isUserLoggedIn && (item.id === 'shelves' || item.id === 'collections')
+                return {
+                  value: item.id,
+                  label: isLocked ? (
+                    <span className="inline-flex items-center gap-1">
+                      <span>{item.label}</span>
+                      <Lock size={12} strokeWidth={2.2} className="top-nav-lock-icon" />
+                    </span>
+                  ) : (
+                    item.label
+                  ),
+                  icon: item.icon,
+                }
+              })}
               value={isExploreMode ? 'explore' : activeShelf === 'collections' ? 'collections' : 'shelves'}
               onChange={(value) => {
-                const item = TOP_NAV_OPTIONS.find((opt) => opt.id === value)
+                const item = visibleTopNavOptions.find((opt) => opt.id === value)
                 if (!item) return
-                if (!isUserLoggedIn && item.id !== 'explore') {
-                  setShowProfileModal(true)
-                  return
-                }
                 setSelectedBook(null)
                 setActiveModalCollection(null)
                 setRequestedBookId('')
+
                 if (item.id === 'explore') {
                   setIsExploreMode(true)
+                  const ownId = cookieUserId || getUserIdFromCookie() || ''
+                  setCurrentUserId(ownId)
+                  if (!ownId) {
+                    setUsername('')
+                  }
                   window.history.pushState({}, '', '/')
                   return
                 }
-                setIsExploreMode(false)
-                const activeUser = currentUserId || cookieUserId || getUserIdFromCookie()
-                if (activeUser && activeUser !== currentUserId) {
-                  setCurrentUserId(String(activeUser))
-                }
-                if (item.id === 'collections') {
-                  setActiveShelf('collections')
-                  const nextPath = activeUser ? `/${activeUser}/collections` : '/collections'
-                  window.history.pushState({}, '', nextPath)
+
+                // If currently in explore feed, switch to own library if available; otherwise require login
+                const targetUser = isExploreMode
+                  ? cookieUserId || getUserIdFromCookie() || currentUserId
+                  : currentUserId || cookieUserId || getUserIdFromCookie()
+
+                if (!targetUser) {
+                  setShowProfileModal(true)
                   return
                 }
+
+                setIsExploreMode(false)
+                if (String(targetUser) !== String(currentUserId)) {
+                  setCurrentUserId(String(targetUser))
+                }
+
+                if (item.id === 'collections') {
+                  setActiveShelf('collections')
+                  window.history.pushState({}, '', `/${targetUser}/collections`)
+                  return
+                }
+
                 const targetShelf =
                   activeShelf === 'collections' ? lastBookShelfRef.current || 'read' : activeShelf
                 setActiveShelf(targetShelf)
-                const nextPath = activeUser ? `/${activeUser}/${targetShelf}` : `/${targetShelf}`
-                window.history.pushState({}, '', nextPath)
+                window.history.pushState({}, '', `/${targetUser}/${targetShelf}`)
               }}
               trackColor="rgba(38, 35, 46, 0.76)"
               thumbColor="#8b5cf6"
@@ -2800,8 +3495,7 @@ function App() {
               activeTextColor="#ffffff"
               size="lg"
               radius={12}
-              inset={5}
-              equalSlots
+              inset={3}
               stretch={100}
               squash={3}
               speed={1}
@@ -2844,11 +3538,11 @@ function App() {
               />
             ) : currentUserId && !isExploreMode && activeShelf === 'collections' ? (
               <JellyRadio
-                items={COLLECTION_FILTER_OPTIONS.map((opt) => ({
+                items={visibleCollectionFilterOptions.map((opt) => ({
                   value: opt.id,
                   label: `${opt.label} (${collectionCounts[opt.id] ?? 0})`,
                 }))}
-                value={activeCollectionFilter}
+                value={!isOwnProfile && activeCollectionFilter === 'private' ? 'all' : activeCollectionFilter}
                 onChange={(value) => setActiveCollectionFilter(value)}
                 chipColor="rgba(38, 35, 46, 0.76)"
                 activeColor="#8b5cf6"
@@ -2886,19 +3580,18 @@ function App() {
             <div
               ref={isSwipableModal ? modalCardRef : undefined}
               className={`book-detail-modal ${showBookQrModal ? 'qr-modal-open' : ''} ${isSwipableModal
-                ? `swipable ${modalPointerRef.current?.isDragging ? 'is-dragging' : ''} ${modalSwipeExit ? `modal-fly-out-${modalSwipeExit}` : ''
-                }`
+                ? `swipable ${modalPointerRef.current?.isDragging ? 'is-dragging' : ''} ${modalSwipeExit ? `modal-fly-out-${modalSwipeExit}` : ''} ${isModalEntering ? 'modal-entering' : ''}`
                 : ''
                 }`}
               style={
                 isSwipableModal
                   ? {
-                    transform: modalSwipeExit
+                    transform: modalSwipeExit || isModalEntering
                       ? undefined
                       : `translate3d(${modalDragOffset.x}px, ${modalDragOffset.y}px, 0) rotate(${modalRotation}deg)`,
-                    transition: modalPointerRef.current?.isDragging
+                    transition: modalPointerRef.current?.isDragging || isModalEntering
                       ? 'none'
-                      : 'transform 0.28s cubic-bezier(0.18, 0.89, 0.32, 1.15)',
+                      : 'transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1)',
                   }
                   : undefined
               }
@@ -2981,6 +3674,8 @@ function App() {
                         <img
                           src={selectedBook.imageUrl}
                           alt={`${selectedBook.title} cover`}
+                          loading="eager"
+                          decoding="async"
                         />
                       ) : (
                         <div className="book-cover-placeholder" aria-hidden="true" />
@@ -3050,44 +3745,28 @@ function App() {
                   ) : (
                     <div className="book-detail-shelf-action-row">
                       <div className="book-shelf-dropdown-wrapper">
-                        <div className={`book-shelf-dropdown-btn-group ${savedShelf ? 'saved' : ''}`}>
-                          <button
-                            type="button"
-                            className="book-shelf-main-btn"
-                            disabled={isSavingShelf}
-                            onClick={() => {
-                              if (savedShelf) {
-                                handleRemoveBookFromShelf()
-                              } else {
-                                handleSaveBookToShelf(targetShelf)
-                              }
-                            }}
-                            title={
-                              savedShelf
-                                ? `Elimină de pe raft (${getShelfLabel(targetShelf)})`
-                                : `Salvează pe raft: ${getShelfLabel(targetShelf)}`
-                            }
-                          >
+                        <button
+                          type="button"
+                          className={`book-shelf-select-btn ${savedShelf ? 'saved' : ''} ${shelfDropdownOpen ? 'open' : ''}`}
+                          disabled={isSavingShelf}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setShelfDropdownOpen((prev) => !prev)
+                          }}
+                          aria-haspopup="listbox"
+                          aria-expanded={shelfDropdownOpen}
+                          title={savedShelf ? `Raft curent: ${getShelfLabel(targetShelf)}. Deschide pentru a schimba raftul` : 'Alege raftul'}
+                        >
+                          <span className="book-shelf-btn-content">
                             {savedShelf ? <Check size={16} /> : <Bookmark size={16} />}
                             <span>
                               {isSavingShelf
-                                ? (savedShelf ? 'Se elimină...' : 'Se salvează...')
-                                : `${getShelfLabel(targetShelf)}`}
+                                ? 'Se salvează...'
+                                : (savedShelf ? getShelfLabel(targetShelf) : 'Alege raftul')}
                             </span>
-                          </button>
-                          <button
-                            type="button"
-                            className={`book-shelf-chevron-toggle-btn ${shelfDropdownOpen ? 'open' : ''}`}
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setShelfDropdownOpen((prev) => !prev)
-                            }}
-                            aria-label="Alege raftul"
-                            title="Alege raftul"
-                          >
-                            <ChevronDown size={16} className={`chevron-icon ${shelfDropdownOpen ? 'open' : ''}`} />
-                          </button>
-                        </div>
+                          </span>
+                          <ChevronDown size={16} className={`chevron-icon ${shelfDropdownOpen ? 'open' : ''}`} />
+                        </button>
 
                         {shelfDropdownOpen && (
                           <div className="book-shelf-options-menu" onClick={(e) => e.stopPropagation()}>
@@ -3098,9 +3777,7 @@ function App() {
                                 className={`book-shelf-option-item ${targetShelf === shelf.id && savedShelf ? 'active' : ''}`}
                                 onClick={() => {
                                   setShelfDropdownOpen(false)
-                                  if (savedShelf && targetShelf === shelf.id) {
-                                    handleRemoveBookFromShelf()
-                                  } else {
+                                  if (!savedShelf || targetShelf !== shelf.id) {
                                     setTargetShelf(shelf.id)
                                     handleSaveBookToShelf(shelf.id)
                                   }
@@ -3110,6 +3787,22 @@ function App() {
                                 {targetShelf === shelf.id && savedShelf && <Check size={14} />}
                               </button>
                             ))}
+                            {savedShelf && (
+                              <>
+                                <div className="book-shelf-menu-divider" />
+                                <button
+                                  type="button"
+                                  className="book-shelf-option-item book-shelf-option-remove"
+                                  onClick={() => {
+                                    setShelfDropdownOpen(false)
+                                    handleRemoveBookFromShelf()
+                                  }}
+                                >
+                                  <Trash2 size={14} />
+                                  <span>Elimină de pe raft</span>
+                                </button>
+                              </>
+                            )}
                           </div>
                         )}
                       </div>
@@ -3201,19 +3894,12 @@ function App() {
                 <div className="profile-modal-header">
                   {supabaseUser ? (
                     <div className="profile-modal-user-header">
-                      <div className="profile-user-badge profile-modal-label">
+                      <div className="profile-user-badge">
+                        {profileUserHeaderName ? (
+                          <span className="profile-user-name">{profileUserHeaderName}</span>
+                        ) : null}
                         <span className="profile-user-email">{supabaseUser.email}</span>
                       </div>
-
-                      <button
-                        type="button"
-                        className="profile-modal-logout-btn"
-                        onClick={handleSignOut}
-                        title="Deconectare din cont"
-                      >
-                        <LogOut size={14} />
-                        Deconectare
-                      </button>
                     </div>
                   ) : (
                     <div className="profile-modal-header-spacer" />
@@ -3288,9 +3974,9 @@ function App() {
                           </span>
                         </div>
                         <div className="profile-name-input-wrapper">
-                          <input
+                          <textarea
                             id="profile-description-input"
-                            type="text"
+                            rows={2}
                             maxLength={140}
                             value={descriptionInput}
                             onChange={(event) => {
@@ -3298,17 +3984,17 @@ function App() {
                               setUploadError('')
                             }}
                             onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
+                              if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
                                 event.preventDefault()
                                 handleSaveDescription()
                               }
                             }}
                             placeholder="ex: Pasionat de cărți SF și literatură clasică"
-                            className="profile-modal-input profile-modal-input-with-action"
+                            className="profile-modal-input profile-modal-textarea-with-action"
                           />
                           <button
                             type="button"
-                            className={`profile-name-save-icon-btn ${savedDescription ? 'saved' : ''}`}
+                            className={`profile-name-save-icon-btn textarea-save-btn ${savedDescription ? 'saved' : ''}`}
                             onClick={handleSaveDescription}
                             disabled={isSavingDescription}
                             aria-label="Salvează descrierea"
@@ -3319,16 +4005,15 @@ function App() {
                         </div>
                       </div>
 
-                      <div className="profile-modal-field">
-                        <label htmlFor="profile-csv-input" className="profile-modal-label">
-                          Incarcă librărie Goodreads
-                        </label>
-                        <div className="profile-csv-row">
-                          <label htmlFor="profile-csv-input" className="profile-file-upload">
-                            <span className="profile-file-upload-text">
-                              {csvFile ? csvFile.name : 'Încarcă fișier CSV...'}
-                            </span>
-                          </label>
+                      <div className="profile-panel profile-csv-panel">
+                        <div className="profile-panel-header">
+                          <span className="profile-panel-title">Librărie Goodreads</span>
+                        </div>
+                        <p className="profile-panel-description">
+                          Exportă fișierul CSV din contul Goodreads (My Books &rarr; Import and export) și încarcă-l aici pentru a sincroniza cărțile, rafturile și recenziile tale.
+                        </p>
+
+                        <div className="profile-csv-center-action">
                           <input
                             id="profile-csv-input"
                             type="file"
@@ -3336,28 +4021,38 @@ function App() {
                             onChange={handleCsvFileChange}
                             className="profile-file-input-hidden"
                           />
-                          <button
-                            type="submit"
-                            className="profile-modal-submit"
-                            disabled={isUploadingCsv || !displayNameInput.trim() || !csvFile}
-                            title={
-                              !csvFile
-                                ? 'Selectează un fișier CSV'
-                                : 'Actualizează librăria'
-                            }
-                          >
-                            {isUploadingCsv ? (
-                              <span className="profile-btn-loading">
-                                <Loader2 size={15} className="spin-icon" />
-                                <span>Se încarcă...</span>
-                              </span>
-                            ) : (
-                              <>
-                                <Upload size={15} />
-                                <span>Încarcă</span>
-                              </>
-                            )}
-                          </button>
+                          <label htmlFor="profile-csv-input" className="profile-csv-choose-btn">
+                            <Upload size={16} />
+                            <span>{csvFile ? 'Schimbă fișierul CSV' : 'Selectează fișierul CSV'}</span>
+                          </label>
+
+                          {csvFile ? (
+                            <div className="profile-csv-selected-info">
+                              <FileText size={15} className="profile-csv-file-icon" />
+                              <span className="profile-csv-selected-name" title={csvFile.name}>{csvFile.name}</span>
+                            </div>
+                          ) : null}
+
+                          {csvFile ? (
+                            <button
+                              type="submit"
+                              className="profile-csv-submit-btn"
+                              disabled={isUploadingCsv || !displayNameInput.trim()}
+                              title="Actualizează librăria"
+                            >
+                              {isUploadingCsv ? (
+                                <span className="profile-btn-loading">
+                                  <Loader2 size={16} className="spin-icon" />
+                                  <span>Se încarcă...</span>
+                                </span>
+                              ) : (
+                                <>
+                                  <Check size={16} />
+                                  <span>Încarcă biblioteca</span>
+                                </>
+                              )}
+                            </button>
+                          ) : null}
                         </div>
                       </div>
 
@@ -3365,20 +4060,21 @@ function App() {
                     </form>
 
                     {generatedProfileUrl ? (
-                      <div className="profile-url-result">
-                        <label className="profile-modal-label">
-                          URL-ul tău pe 'Ce mai citim'
-                        </label>
-                        <div className="profile-url-row">
-                          <div className="profile-url-field">
-                            <a
-                              href={generatedProfileUrl}
-                              className="profile-url-text"
-                              onClick={() => setShowProfileModal(false)}
-                              title="Mergi la librăria ta"
-                            >
-                              {generatedProfileUrl}
-                            </a>
+                      <div className="profile-panel profile-share-panel">
+                        <div className="profile-panel-header">
+                          <span className="profile-panel-title">Distribuie profilul tău</span>
+                        </div>
+
+                        <div className="profile-url-field">
+                          <a
+                            href={generatedProfileUrl}
+                            className="profile-url-text"
+                            onClick={() => setShowProfileModal(false)}
+                            title="Mergi la librăria ta"
+                          >
+                            {generatedProfileUrl}
+                          </a>
+                          <div className="profile-url-btn-group">
                             <button
                               type="button"
                               className={`profile-url-copy-icon-btn ${copiedUrl ? 'copied' : ''}`}
@@ -3388,25 +4084,40 @@ function App() {
                             >
                               {copiedUrl ? <Check size={16} /> : <Copy size={16} />}
                             </button>
+                            <button
+                              type="button"
+                              className={`profile-url-share-icon-btn ${sharedUrl ? 'shared' : ''}`}
+                              onClick={handleShareGeneratedUrl}
+                              aria-label="Distribuie linkul"
+                              title={sharedUrl ? 'Distribuit!' : 'Distribuie linkul'}
+                            >
+                              {sharedUrl ? <Check size={16} /> : <Share2 size={16} />}
+                            </button>
                           </div>
-                          <button
-                            type="button"
-                            className={`profile-url-share-btn ${sharedUrl ? 'shared' : ''}`}
-                            onClick={handleShareGeneratedUrl}
-                            title="Distribuie linkul către librăria ta"
-                          >
-                            {sharedUrl ? <Check size={15} /> : <Share2 size={15} />}
-                            <span>{sharedUrl ? 'Distribuit!' : 'Distribuie'}</span>
-                          </button>
                         </div>
 
                         {qrCodeDataUrl ? (
-                          <div className="profile-qr-wrapper">
-                            <img src={qrCodeDataUrl} alt="QR code for generated website URL" className="profile-qr-image" />
+                          <div className="profile-qr-section">
+                            <div className="profile-qr-wrapper">
+                              <img src={qrCodeDataUrl} alt="Cod QR pentru linkul profilului tău" className="profile-qr-image" />
+                            </div>
+                            <p className="profile-qr-caption">
+                              Scanează codul QR pentru a deschide direct biblioteca ta publică de cărți.
+                            </p>
                           </div>
                         ) : null}
                       </div>
                     ) : null}
+
+                    <button
+                      type="button"
+                      className="profile-modal-logout-btn-bottom"
+                      onClick={handleSignOut}
+                      title="Deconectare din cont"
+                    >
+                      <LogOut size={16} />
+                      <span>Deconectare</span>
+                    </button>
                   </>
                 )}
               </div>
@@ -3473,6 +4184,7 @@ function App() {
                         onTogglePrivacy={handleToggleCollectionPrivacy}
                         isTogglingPrivacy={togglingPrivacyCollectionId === String(collection.id)}
                         onBookClick={handleOpenCollectionBook}
+                        onUpdateTitle={handleUpdateCollectionTitle}
                       />
                     )
                   })
@@ -3484,7 +4196,7 @@ function App() {
           <>
             {isLoading ? (
               <div className="book-controls book-controls-placeholder" aria-hidden="true" />
-            ) : shelfBooks.length > 0 ? (
+            ) : totalShelfBooks.length > 0 || bookSearchQuery.trim() ? (
               <div
                 className="book-controls"
                 aria-label="Book controls"
@@ -3528,6 +4240,13 @@ function App() {
                     icon={<ArrowUpDown size={13} strokeWidth={2} />}
                   />
                 </div>
+
+                <div className="toolbar-group">
+                  <ShelfSearchInput
+                    searchQuery={bookSearchQuery}
+                    onSearch={setBookSearchQuery}
+                  />
+                </div>
               </div>
             ) : null}
 
@@ -3563,7 +4282,16 @@ function App() {
               ) : username && visibleBooks.length === 0 ? (
                 <div className="books-carousel empty-carousel" aria-live="polite" aria-label="Empty shelf">
                   <div className="empty-shelf-state">
-                    <h2>Nu exista nimic pe acest raft.</h2>
+                    <h2>{bookSearchQuery.trim() ? 'Nicio carte găsită pentru căutarea ta.' : 'Nu exista nimic pe acest raft.'}</h2>
+                    {bookSearchQuery.trim() ? (
+                      <button
+                        type="button"
+                        className="empty-shelf-clear-search-btn"
+                        onClick={() => setBookSearchQuery('')}
+                      >
+                        Resetează căutarea
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               ) : (
@@ -3623,6 +4351,18 @@ function App() {
 
             </section>
           </>
+        )}
+
+        {isVisitingOtherUser && (
+          <button
+            type="button"
+            className="back-url-trigger-round"
+            onClick={handleBackNavigation}
+            aria-label="Înapoi"
+            title="Înapoi"
+          >
+            <ArrowLeft size={18} strokeWidth={2.4} />
+          </button>
         )}
 
         {!isCheckingAuth && (
@@ -3688,11 +4428,21 @@ function App() {
         {showNewCollectionInput && (
           <div
             className="profile-modal-backdrop"
-            onClick={() => {
-              setShowNewCollectionInput(false)
-              setNewCollectionTitle('')
-              setNewCollectionDescription('')
-              setNewCollectionIsPrivate(false)
+            onPointerDown={(e) => {
+              if (e.target === e.currentTarget) {
+                setShowNewCollectionInput(false)
+                setNewCollectionTitle('')
+                setNewCollectionDescription('')
+                setNewCollectionIsPrivate(false)
+              }
+            }}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setShowNewCollectionInput(false)
+                setNewCollectionTitle('')
+                setNewCollectionDescription('')
+                setNewCollectionIsPrivate(false)
+              }
             }}
           >
             <div
@@ -3803,9 +4553,17 @@ function App() {
         {isSearchModalOpen && !selectedBook && (
           <div
             className="search-modal-backdrop"
-            onClick={() => {
-              setIsSearchModalOpen(false)
-              setTargetCollectionForSearch(null)
+            onPointerDown={(e) => {
+              if (e.target === e.currentTarget) {
+                setIsSearchModalOpen(false)
+                setTargetCollectionForSearch(null)
+              }
+            }}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setIsSearchModalOpen(false)
+                setTargetCollectionForSearch(null)
+              }
             }}
           >
             <div

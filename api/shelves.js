@@ -90,28 +90,30 @@ export const saveBookToShelf = async ({
     const cleanRating = Math.min(5, Math.max(0, parseInt(rating, 10) || 0))
     shelfSql = `
       INSERT INTO user_shelves (
-        user_id, book_id, bookshelves, my_rating, date_added, updated_at
+        user_id, book_id, bookshelves, my_rating, date_added, date_read, updated_at
       )
-      VALUES ($1, $2, $3, $4, NOW(), NOW())
+      VALUES ($1, $2, $3, $4, NOW(), CASE WHEN $3 = 'read' THEN CURRENT_DATE ELSE NULL END, NOW())
       ON CONFLICT (user_id, book_id)
       DO UPDATE SET
         bookshelves = EXCLUDED.bookshelves,
         my_rating = EXCLUDED.my_rating,
+        date_read = CASE WHEN EXCLUDED.bookshelves = 'read' THEN CURRENT_DATE ELSE NULL END,
         updated_at = NOW()
-      RETURNING user_id, book_id, bookshelves, my_rating;
+      RETURNING user_id, book_id, bookshelves, my_rating, TO_CHAR(date_read, 'YYYY/MM/DD') AS date_read;
     `.trim()
     shelfParams = [cleanUserId, cleanBookId, cleanShelf, cleanRating]
   } else {
     shelfSql = `
       INSERT INTO user_shelves (
-        user_id, book_id, bookshelves, date_added, updated_at
+        user_id, book_id, bookshelves, date_added, date_read, updated_at
       )
-      VALUES ($1, $2, $3, NOW(), NOW())
+      VALUES ($1, $2, $3, NOW(), CASE WHEN $3 = 'read' THEN CURRENT_DATE ELSE NULL END, NOW())
       ON CONFLICT (user_id, book_id)
       DO UPDATE SET
         bookshelves = EXCLUDED.bookshelves,
+        date_read = CASE WHEN EXCLUDED.bookshelves = 'read' THEN CURRENT_DATE ELSE NULL END,
         updated_at = NOW()
-      RETURNING user_id, book_id, bookshelves, my_rating;
+      RETURNING user_id, book_id, bookshelves, my_rating, TO_CHAR(date_read, 'YYYY/MM/DD') AS date_read;
     `.trim()
     shelfParams = [cleanUserId, cleanBookId, cleanShelf]
   }
@@ -123,6 +125,7 @@ export const saveBookToShelf = async ({
     bookId: cleanBookId,
     shelf: rows?.[0]?.bookshelves || cleanShelf,
     myRating: Number(rows?.[0]?.my_rating) || (rating !== undefined && rating !== null ? Number(rating) : 0),
+    dateRead: rows?.[0]?.date_read || (cleanShelf === 'read' ? new Date().toISOString().slice(0, 10).replace(/-/g, '/') : ''),
   }
 }
 
@@ -152,9 +155,11 @@ export const rateBook = async ({ userId, bookId, rating, queryFn }) => {
   if (existing && existing.length > 0) {
     const updateSql = `
       UPDATE user_shelves
-      SET my_rating = $3, updated_at = NOW()
+      SET my_rating = $3,
+          date_read = CASE WHEN bookshelves = 'read' THEN COALESCE(date_read, CURRENT_DATE) ELSE date_read END,
+          updated_at = NOW()
       WHERE user_id = $1 AND book_id = $2
-      RETURNING user_id, book_id, bookshelves, my_rating;
+      RETURNING user_id, book_id, bookshelves, my_rating, TO_CHAR(date_read, 'YYYY/MM/DD') AS date_read;
     `.trim()
 
     const rows = await executeQuery(updateSql, [cleanUserId, cleanBookId, cleanRating])
@@ -164,20 +169,22 @@ export const rateBook = async ({ userId, bookId, rating, queryFn }) => {
       bookId: cleanBookId,
       shelf: rows?.[0]?.bookshelves || existing[0]?.bookshelves || 'read',
       myRating: Number(rows?.[0]?.my_rating) || cleanRating,
+      dateRead: rows?.[0]?.date_read || '',
     }
   }
 
   // If not yet saved on user_shelves, insert on 'read' shelf as default
   const insertSql = `
     INSERT INTO user_shelves (
-      user_id, book_id, bookshelves, my_rating, date_added, updated_at
+      user_id, book_id, bookshelves, my_rating, date_added, date_read, updated_at
     )
-    VALUES ($1, $2, 'read', $3, NOW(), NOW())
+    VALUES ($1, $2, 'read', $3, NOW(), CURRENT_DATE, NOW())
     ON CONFLICT (user_id, book_id)
     DO UPDATE SET
       my_rating = EXCLUDED.my_rating,
+      date_read = COALESCE(user_shelves.date_read, CURRENT_DATE),
       updated_at = NOW()
-    RETURNING user_id, book_id, bookshelves, my_rating;
+    RETURNING user_id, book_id, bookshelves, my_rating, TO_CHAR(date_read, 'YYYY/MM/DD') AS date_read;
   `.trim()
 
   const rows = await executeQuery(insertSql, [cleanUserId, cleanBookId, cleanRating])
@@ -187,6 +194,7 @@ export const rateBook = async ({ userId, bookId, rating, queryFn }) => {
     bookId: cleanBookId,
     shelf: rows?.[0]?.bookshelves || 'read',
     myRating: Number(rows?.[0]?.my_rating) || cleanRating,
+    dateRead: rows?.[0]?.date_read || (rows?.[0]?.bookshelves === 'read' ? new Date().toISOString().slice(0, 10).replace(/-/g, '/') : ''),
   }
 }
 

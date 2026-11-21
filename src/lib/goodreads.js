@@ -418,3 +418,32 @@ export const getFinishedBooksTotals = (books = [], year) => {
 
   return { count, totalPages }
 }
+
+export const normalizeSearchText = (str) =>
+  String(str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+
+export const matchesBookSearch = (book, query) => {
+  if (!query) return true
+  const cleanQ = normalizeSearchText(query)
+  if (!cleanQ) return true
+  if (!book) return false
+
+  const combined = [
+    book.title,
+    book.author,
+    book.publisher,
+    book.isbn,
+    book.isbn13,
+    book.mainCategory,
+  ]
+    .map((field) => normalizeSearchText(field))
+    .join(' ')
+
+  const words = cleanQ.split(/\s+/).filter(Boolean)
+  return words.every((word) => combined.includes(word))
+}
+

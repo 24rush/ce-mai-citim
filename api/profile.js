@@ -27,9 +27,26 @@ export const ensureUserProfileColumns = async (queryFn) => {
   }
 }
 
+const withAutoMigrateProfile = async (executeQuery, fn) => {
+  try {
+    return await fn()
+  } catch (err) {
+    const msg = String(err?.message || '')
+    if (
+      err?.code === '42P01' ||
+      err?.code === '42703' ||
+      (msg.includes('relation') && msg.includes('does not exist')) ||
+      (msg.includes('column') && msg.includes('does not exist'))
+    ) {
+      await ensureUserProfileColumns(executeQuery)
+      return await fn()
+    }
+    throw err
+  }
+}
+
 export const updateUserProfile = async ({ userId, authUserId, displayName, description, queryFn }) => {
   const executeQuery = queryFn || (await createDefaultDbQuery())
-  await ensureUserProfileColumns(executeQuery)
 
   const cleanUserId = String(userId || '').trim()
   const cleanAuthId = String(authUserId || '').trim()
@@ -68,11 +85,13 @@ export const updateUserProfile = async ({ userId, authUserId, displayName, descr
   values.push(cleanAuthId)
   const authIdParam = paramIdx++
 
-  await executeQuery(
-    `UPDATE users
-     SET ${updates.join(', ')}
-     WHERE (user_id = $${userIdParam} AND $${userIdParam} <> '') OR (auth_user_id = $${authIdParam} AND $${authIdParam} <> '');`,
-    values,
+  await withAutoMigrateProfile(executeQuery, () =>
+    executeQuery(
+      `UPDATE users
+       SET ${updates.join(', ')}
+       WHERE (user_id = $${userIdParam} AND $${userIdParam} <> '') OR (auth_user_id = $${authIdParam} AND $${authIdParam} <> '');`,
+      values,
+    ),
   )
 
   const result = { success: true }
@@ -99,7 +118,6 @@ export const syncUserProfile = async ({
   queryFn,
 }) => {
   const executeQuery = queryFn || (await createDefaultDbQuery())
-  await ensureUserProfileColumns(executeQuery)
 
   const cleanAuthId = String(authUserId || '').trim()
   if (!cleanAuthId) {
@@ -109,81 +127,83 @@ export const syncUserProfile = async ({
   const cleanExistingId = String(existingUserId || '').trim()
   const isValidExistingId = /^[a-zA-Z0-9]{8}$/.test(cleanExistingId)
 
-  // 1. Check if user already exists for this auth_user_id
-  const existingUserRows = await executeQuery(
-    'SELECT user_id, display_name, auth_user_id, COALESCE(description, \'\') AS description FROM users WHERE auth_user_id = $1 LIMIT 1;',
-    [cleanAuthId],
-  )
-
-  if (existingUserRows && existingUserRows.length > 0) {
-    const row = existingUserRows[0]
-    await executeQuery('UPDATE users SET last_access = NOW() WHERE user_id = $1;', [row.user_id])
-    const profileUrl = baseUrl ? `${baseUrl}/${row.user_id}` : `/${row.user_id}`
-    return {
-      userId: row.user_id,
-      displayName: row.display_name,
-      description: row.description || '',
-      profileUrl,
-      url: profileUrl,
-      isNew: false,
-    }
-  }
-
-  // 2. Initial name after login will be user's mail without the domain
-  const emailPrefix = String(email || '').split('@')[0].trim()
-  const fallbackDisplayName =
-    emailPrefix ||
-    String(displayName || '').trim() ||
-    'Cititor'
-
-  let targetUserId = ''
-
-  if (isValidExistingId) {
-    const existingByIdRows = await executeQuery(
-      'SELECT user_id, auth_user_id, display_name, COALESCE(description, \'\') AS description FROM users WHERE user_id = $1 LIMIT 1;',
-      [cleanExistingId],
+  return withAutoMigrateProfile(executeQuery, async () => {
+    // 1. Check if user already exists for this auth_user_id
+    const existingUserRows = await executeQuery(
+      'SELECT user_id, display_name, auth_user_id, COALESCE(description, \'\') AS description FROM users WHERE auth_user_id = $1 LIMIT 1;',
+      [cleanAuthId],
     )
 
-    if (existingByIdRows && existingByIdRows.length > 0) {
-      const candidateRow = existingByIdRows[0]
-      // Only claim if not claimed by another auth account
-      if (!candidateRow.auth_user_id) {
-        targetUserId = candidateRow.user_id
-        await executeQuery(
-          `UPDATE users
+    if (existingUserRows && existingUserRows.length > 0) {
+      const row = existingUserRows[0]
+      await executeQuery('UPDATE users SET last_access = NOW() WHERE user_id = $1;', [row.user_id])
+      const profileUrl = baseUrl ? `${baseUrl}/${row.user_id}` : `/${row.user_id}`
+      return {
+        userId: row.user_id,
+        displayName: row.display_name,
+        description: row.description || '',
+        profileUrl,
+        url: profileUrl,
+        isNew: false,
+      }
+    }
+
+    // 2. Initial name after login will be user's mail without the domain
+    const emailPrefix = String(email || '').split('@')[0].trim()
+    const fallbackDisplayName =
+      emailPrefix ||
+      String(displayName || '').trim() ||
+      'Cititor'
+
+    let targetUserId = ''
+
+    if (isValidExistingId) {
+      const existingByIdRows = await executeQuery(
+        'SELECT user_id, auth_user_id, display_name, COALESCE(description, \'\') AS description FROM users WHERE user_id = $1 LIMIT 1;',
+        [cleanExistingId],
+      )
+
+      if (existingByIdRows && existingByIdRows.length > 0) {
+        const candidateRow = existingByIdRows[0]
+        // Only claim if not claimed by another auth account
+        if (!candidateRow.auth_user_id) {
+          targetUserId = candidateRow.user_id
+          await executeQuery(
+            `UPDATE users
            SET auth_user_id = $1,
                display_name = COALESCE(NULLIF(display_name, ''), $2),
                last_access = NOW()
            WHERE user_id = $3;`,
-          [cleanAuthId, fallbackDisplayName, targetUserId],
-        )
+            [cleanAuthId, fallbackDisplayName, targetUserId],
+          )
+        }
       }
     }
-  }
 
-  // 3. Otherwise generate a brand new user_id
-  if (!targetUserId) {
-    targetUserId = generateUserId()
-    await executeQuery(
-      `INSERT INTO users (user_id, display_name, auth_user_id, description, last_access)
-       VALUES ($1, $2, $3, $4, NOW())
-       ON CONFLICT (user_id) DO UPDATE SET
-         auth_user_id = COALESCE(users.auth_user_id, EXCLUDED.auth_user_id),
-         display_name = COALESCE(NULLIF(users.display_name, ''), EXCLUDED.display_name),
-         last_access = NOW();`,
-      [targetUserId, fallbackDisplayName, cleanAuthId, String(description || '').slice(0, 140).trim()],
-    )
-  }
+    // 3. Otherwise generate a brand new user_id
+    if (!targetUserId) {
+      targetUserId = generateUserId()
+      await executeQuery(
+        `INSERT INTO users (user_id, display_name, auth_user_id, description, last_access)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT (user_id) DO UPDATE SET
+           auth_user_id = COALESCE(users.auth_user_id, EXCLUDED.auth_user_id),
+           display_name = COALESCE(NULLIF(users.display_name, ''), EXCLUDED.display_name),
+           last_access = NOW();`,
+        [targetUserId, fallbackDisplayName, cleanAuthId, String(description || '').slice(0, 140).trim()],
+      )
+    }
 
-  const profileUrl = baseUrl ? `${baseUrl}/${targetUserId}` : `/${targetUserId}`
-  return {
-    userId: targetUserId,
-    displayName: fallbackDisplayName,
-    description: String(description || '').slice(0, 140).trim(),
-    profileUrl,
-    url: profileUrl,
-    isNew: true,
-  }
+    const profileUrl = baseUrl ? `${baseUrl}/${targetUserId}` : `/${targetUserId}`
+    return {
+      userId: targetUserId,
+      displayName: fallbackDisplayName,
+      description: String(description || '').slice(0, 140).trim(),
+      profileUrl,
+      url: profileUrl,
+      isNew: true,
+    }
+  })
 }
 
 export default async function handler(req, res) {

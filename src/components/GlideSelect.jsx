@@ -226,32 +226,42 @@ export default function GlideSelect({
   }, [disabled]);
   useEffect(() => () => clearTimeout(closeTimer.current), []);
 
-  const rowAt = y => {
+  const rowAt = (y, x) => {
+    if (typeof x === 'number' && typeof y === 'number') {
+      const el = document.elementFromPoint(x, y);
+      const row = el?.closest?.('[data-index]');
+      if (row && row.dataset.index !== undefined) {
+        const idx = Number(row.dataset.index);
+        if (idx >= 0 && idx < items.length) return idx;
+      }
+    }
     const s = scrub.current;
     if (!s) return null;
-    const i = Math.floor((y - s.top - PAD) / step);
+    const i = Math.floor((y - s.top) / step);
     return i >= 0 && i < items.length ? i : null;
   };
   const onListDown = e => {
     e.stopPropagation();
     if (scrub.current) return;
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch { }
+    if (e.pointerType !== 'touch') {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch { }
+    }
     scrub.current = { id: e.pointerId, top: e.currentTarget.getBoundingClientRect().top };
     instant.current = true;
-    setActive(rowAt(e.clientY));
+    setActive(rowAt(e.clientY, e.clientX));
   };
   const onListMove = e => {
     e.stopPropagation();
     if (!scrub.current || scrub.current.id !== e.pointerId) return;
-    const i = rowAt(e.clientY);
-    if (i !== active) setActive(i);
+    const i = rowAt(e.clientY, e.clientX);
+    if (i !== null && i !== active) setActive(i);
   };
   const onListUp = e => {
     e.stopPropagation();
     if (!scrub.current || scrub.current.id !== e.pointerId) return;
-    const i = e.type === 'pointerup' ? rowAt(e.clientY) : null;
+    const i = e.type === 'pointerup' ? rowAt(e.clientY, e.clientX) : null;
     scrub.current = null;
     if (i !== null) pick(i, false);
     else if (!rememberPosition) setActive(null);

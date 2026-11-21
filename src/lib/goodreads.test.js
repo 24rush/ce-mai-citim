@@ -15,6 +15,8 @@ import {
   convertIsbn10To13,
   convertIsbn13To10,
   resolveBookIsbns,
+  normalizeSearchText,
+  matchesBookSearch,
 } from './goodreads.js'
 import uploadCsvHandler, { parseCsvForDatabase, isAllowedShelf } from '../../api/uploadcsv.js'
 import getUserBooksHandler from '../../api/goodreads/[userId].js'
@@ -38,6 +40,8 @@ import collectionsHandler, {
   removeBookFromCollection,
   deleteCollection,
   updateCollectionPrivacy,
+  updateCollectionTitle,
+  updateCollection,
   getUserCollections,
   getExploreCollections,
 } from '../../api/collections.js'
@@ -1279,6 +1283,73 @@ test('saveBookToShelf saves canonical book and upserts user_shelves', async () =
 
   assert.match(executedQueries[1].sql, /INSERT INTO user_shelves/)
   assert.deepEqual(executedQueries[1].values, ['user1234', 'book999', 'to-read'])
+})
+
+test('saveBookToShelf sets date_read to CURRENT_DATE when shelf is read', async () => {
+  const executedQueries = []
+  const mockDbQuery = async (sql, values) => {
+    executedQueries.push({ sql, values })
+    if (sql.includes('INSERT INTO user_shelves')) {
+      return [{
+        user_id: values[0],
+        book_id: values[1],
+        bookshelves: values[2],
+        date_read: '2026/11/21',
+      }]
+    }
+    return []
+  }
+
+  const result = await saveBookToShelf({
+    userId: 'user1234',
+    bookId: 'book999',
+    shelf: 'read',
+    book: {
+      title: 'Dune',
+      author: 'Frank Herbert',
+    },
+    queryFn: mockDbQuery,
+  })
+
+  assert.equal(result.success, true)
+  assert.equal(result.shelf, 'read')
+  assert.equal(result.dateRead, '2026/11/21')
+  assert.match(executedQueries[1].sql, /date_read/)
+  assert.match(executedQueries[1].sql, /CASE WHEN \$3 = 'read' THEN CURRENT_DATE ELSE NULL END/)
+  assert.match(executedQueries[1].sql, /CASE WHEN EXCLUDED\.bookshelves = 'read' THEN CURRENT_DATE ELSE NULL END/)
+})
+
+test('rateBook sets date_read to CURRENT_DATE on read shelf for new books', async () => {
+  const executedQueries = []
+  const mockDbQuery = async (sql, values) => {
+    executedQueries.push({ sql, values })
+    if (sql.includes('SELECT bookshelves FROM user_shelves')) {
+      return []
+    }
+    if (sql.includes('INSERT INTO user_shelves')) {
+      return [{
+        user_id: values[0],
+        book_id: values[1],
+        bookshelves: 'read',
+        my_rating: values[2],
+        date_read: '2026/11/21',
+      }]
+    }
+    return []
+  }
+
+  const result = await rateBook({
+    userId: 'user1234',
+    bookId: 'book999',
+    rating: 5,
+    queryFn: mockDbQuery,
+  })
+
+  assert.equal(result.success, true)
+  assert.equal(result.shelf, 'read')
+  assert.equal(result.myRating, 5)
+  assert.equal(result.dateRead, '2026/11/21')
+  assert.match(executedQueries[1].sql, /CURRENT_DATE/)
 })
 
 test('getBookShelfStatus returns shelf status for user book', async () => {
@@ -2829,6 +2900,98 @@ test('collections endpoint toggles collection privacy between private and public
   assert.equal(directResult.isPrivate, true)
 })
 
+test('collections endpoint updates collection title via PATCH, POST, and direct function', async () => {
+  let dbCollection = {
+    collection_id: '101',
+    user_id: 'abcd1234',
+    title: 'Titlu Vechi',
+    description: 'Descriere',
+    is_private: false,
+    created_at: '2026-03-01T00:00:00Z',
+    updated_at: '2026-03-01T00:00:00Z',
+  }
+
+  const mockQuery = async (sqlText, values) => {
+    if (sqlText.includes('UPDATE collections') && sqlText.includes('title = $1')) {
+      dbCollection = {
+        ...dbCollection,
+        title: values[0],
+        updated_at: '2026-03-02T00:00:00Z',
+      }
+      return [dbCollection]
+    }
+    return []
+  }
+
+  // 1. Update title via PATCH
+  const patchRes = createMockRes()
+  await collectionsHandler(
+    {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        userId: 'abcd1234',
+        collectionId: '101',
+        title: 'SF Favorit',
+      },
+      dbQuery: mockQuery,
+    },
+    patchRes,
+  )
+  assert.equal(patchRes.statusCode, 200)
+  assert.equal(patchRes.payload.success, true)
+  assert.equal(patchRes.payload.title, 'SF Favorit')
+  assert.equal(patchRes.payload.collection.title, 'SF Favorit')
+
+  // 2. Update title via POST action: 'update_title'
+  const postRes = createMockRes()
+  await collectionsHandler(
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        action: 'update_title',
+        userId: 'abcd1234',
+        collectionId: '101',
+        title: 'Fantasy Clasic',
+      },
+      dbQuery: mockQuery,
+    },
+    postRes,
+  )
+  assert.equal(postRes.statusCode, 200)
+  assert.equal(postRes.payload.success, true)
+  assert.equal(postRes.payload.title, 'Fantasy Clasic')
+
+  // 3. Direct call to updateCollectionTitle
+  const directResult = await updateCollectionTitle({
+    userId: 'abcd1234',
+    collectionId: '101',
+    title: 'Non-Fiction',
+    queryFn: mockQuery,
+  })
+  assert.equal(directResult.success, true)
+  assert.equal(directResult.title, 'Non-Fiction')
+
+  // 4. Reject empty title
+  const emptyRes = createMockRes()
+  await collectionsHandler(
+    {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        userId: 'abcd1234',
+        collectionId: '101',
+        title: '   ',
+      },
+      dbQuery: mockQuery,
+    },
+    emptyRes,
+  )
+  assert.equal(emptyRes.statusCode, 400)
+  assert.match(emptyRes.payload.error, /title is required/i)
+})
+
 test('isbn endpoint server-side check skips Google Books if google_books_queried is already true in DB', async () => {
   const fetchCalls = []
   const mockFetch = async (url) => {
@@ -2942,6 +3105,44 @@ test('isbn endpoint server-side check queries Google Books when google_books_que
   assert.ok(updateQuery.sqlText.includes('google_books_queried'), 'Should update google_books_queried in DB')
   assert.ok(updateQuery.values.includes(true), 'Should set google_books_queried to true in values')
 })
+
+test('matchesBookSearch performs client-side search across title, author, isbn, category and ignores diacritics', () => {
+  const book = {
+    title: 'Pădurea Spânzuraților',
+    author: 'Liviu Rebreanu',
+    publisher: 'Minerva',
+    isbn: '9789732104567',
+    mainCategory: 'Ficțiune',
+  }
+
+  // Matches title with and without diacritics
+  assert.equal(matchesBookSearch(book, 'padurea'), true)
+  assert.equal(matchesBookSearch(book, 'PĂDUREA'), true)
+  assert.equal(matchesBookSearch(book, 'spanzur'), true)
+
+  // Matches author
+  assert.equal(matchesBookSearch(book, 'rebreanu'), true)
+  assert.equal(matchesBookSearch(book, 'liviu'), true)
+
+  // Matches multiple terms (author + title)
+  assert.equal(matchesBookSearch(book, 'liviu padurea'), true)
+
+  // Matches publisher and category
+  assert.equal(matchesBookSearch(book, 'minerva'), true)
+  assert.equal(matchesBookSearch(book, 'fictiune'), true)
+
+  // Matches ISBN
+  assert.equal(matchesBookSearch(book, '9789732104567'), true)
+
+  // Empty query matches all
+  assert.equal(matchesBookSearch(book, ''), true)
+  assert.equal(matchesBookSearch(book, '   '), true)
+
+  // Non-matching query
+  assert.equal(matchesBookSearch(book, 'harry potter'), false)
+  assert.equal(matchesBookSearch(null, 'padurea'), false)
+})
+
 
 
 

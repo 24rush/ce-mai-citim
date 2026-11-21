@@ -1,6 +1,7 @@
 {
   "framework": "vite",
   "devCommand": "vite --port $PORT",
+  "regions": ["fra1"],
   "rewrites": [
     { "source": "/api/covers", "destination": "/api/cover" },
     { "source": "/api/(.*)", "destination": "/api/$1" },

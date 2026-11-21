@@ -77,6 +77,15 @@
   transform: scale(0.97);
 }
 
+.glide-select__label {
+  display: inline-block;
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
 .glide-select__label[data-empty] {
   opacity: 0.6;
 }
@@ -174,7 +183,7 @@
   position: relative;
   display: grid;
   gap: 1px;
-  touch-action: none;
+  touch-action: pan-y;
 }
 
 .glide-select__pill {
