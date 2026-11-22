@@ -366,6 +366,12 @@ const RubberSegment = ({
           disabled={disabled || Boolean(item.disabled)}
           className="inline-flex h-[calc(var(--rs-h)-var(--rs-inset)*2)] min-w-[var(--rs-min)] items-center justify-center gap-1.5 m-0 border-0 bg-transparent px-[var(--rs-pad)] py-0 rounded-[var(--rs-thumb-radius)] [font:inherit] text-[length:var(--rs-font)] font-medium leading-none whitespace-nowrap outline-none [transition:opacity_160ms_ease,transform_160ms_var(--rs-ease-out)] motion-reduce:[transition:opacity_160ms_ease] cursor-pointer [color:var(--rs-ink)] opacity-70 aria-checked:cursor-default disabled:cursor-default disabled:opacity-30 group-data-[draggable]:aria-checked:cursor-grab group-data-[held]:cursor-grabbing data-[pressed]:[transform:scale(0.96)] focus-visible:outline-2 focus-visible:outline-offset-[3px] focus-visible:[outline-color:var(--rs-thumb)] [@media(hover:hover)_and_(pointer:fine)]:[&[aria-checked=false]:not(:disabled):hover]:opacity-90 [&_svg]:shrink-0"
           onPointerDown={e => handlePointerDown(e, i)}
+          onClick={e => {
+            e.preventDefault();
+            if (disabled || Boolean(item.disabled)) return;
+            commit(i);
+            jumpTo(i);
+          }}
           onKeyDown={handleKeyDown}
         >
           {item.icon}

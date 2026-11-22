@@ -50,6 +50,9 @@ export const getDatabaseConnectionString = () => {
   return url
 }
 
+let cachedSql = null
+let cachedConnectionString = ''
+
 export const createDefaultDbQuery = async () => {
   const connectionString = getDatabaseConnectionString()
   if (!connectionString) {
@@ -58,8 +61,13 @@ export const createDefaultDbQuery = async () => {
     )
   }
 
-  const { neon } = await import('@neondatabase/serverless')
-  const sql = neon(connectionString)
+  if (!cachedSql || cachedConnectionString !== connectionString) {
+    const { neon } = await import('@neondatabase/serverless')
+    cachedSql = neon(connectionString)
+    cachedConnectionString = connectionString
+  }
+
+  const sql = cachedSql
   return (queryText, values) => sql.query(queryText, values)
 }
 

@@ -138,6 +138,21 @@ export const syncUserProfile = async ({
       const row = existingUserRows[0]
       await executeQuery('UPDATE users SET last_access = NOW() WHERE user_id = $1;', [row.user_id])
       const profileUrl = baseUrl ? `${baseUrl}/${row.user_id}` : `/${row.user_id}`
+
+      let collections = []
+      try {
+        const colRows = await executeQuery(
+          'SELECT collection_id, title FROM collections WHERE user_id = $1 ORDER BY created_at DESC;',
+          [row.user_id],
+        )
+        collections = (colRows || []).map((r) => ({
+          id: String(r.collection_id),
+          title: r.title,
+        }))
+      } catch {
+        collections = []
+      }
+
       return {
         userId: row.user_id,
         displayName: row.display_name,
@@ -145,6 +160,7 @@ export const syncUserProfile = async ({
         profileUrl,
         url: profileUrl,
         isNew: false,
+        collections,
       }
     }
 
@@ -194,6 +210,20 @@ export const syncUserProfile = async ({
       )
     }
 
+    let collections = []
+    try {
+      const colRows = await executeQuery(
+        'SELECT collection_id, title FROM collections WHERE user_id = $1 ORDER BY created_at DESC;',
+        [targetUserId],
+      )
+      collections = (colRows || []).map((r) => ({
+        id: String(r.collection_id),
+        title: r.title,
+      }))
+    } catch {
+      collections = []
+    }
+
     const profileUrl = baseUrl ? `${baseUrl}/${targetUserId}` : `/${targetUserId}`
     return {
       userId: targetUserId,
@@ -202,6 +232,7 @@ export const syncUserProfile = async ({
       profileUrl,
       url: profileUrl,
       isNew: true,
+      collections,
     }
   })
 }

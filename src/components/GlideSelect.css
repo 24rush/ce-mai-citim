@@ -253,6 +253,18 @@
   visibility: visible;
 }
 
+@media (max-width: 480px) {
+  .glide-select__label {
+    max-width: min(110px, 30vw);
+  }
+
+  .glide-select__trigger {
+    max-width: 100%;
+    padding: 0 6px 0 8px;
+    gap: 4px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .glide-select__menu {
     transform: none !important;

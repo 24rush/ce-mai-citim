@@ -44,6 +44,8 @@ import collectionsHandler, {
   updateCollection,
   getUserCollections,
   getExploreCollections,
+  getUserCollectionSummaries,
+  getBookCollectionIds,
 } from '../../api/collections.js'
 
 const createMockRes = () => {
@@ -2665,131 +2667,131 @@ test('collections endpoint creates collections, adds books, lists user & explore
         },
       ]
     }
-    if (sqlText.includes('SELECT collection_id, user_id, title')) {
-      return [{ collection_id: 101, user_id: 'abcd1234', title: 'Top SF' }]
+      if (sqlText.includes('SELECT collection_id, user_id, title') || sqlText.includes('verified_collection')) {
+        return [{ collection_count: 1, collection_id: 101, user_id: 'abcd1234', title: 'Top SF' }]
+      }
+      if (sqlText.includes('DELETE FROM collection_books')) {
+        return [{ collection_id: 101, book_id: 'gb_dune' }]
+      }
+      if (sqlText.includes('FROM collections c')) {
+        return [
+          {
+            collection_id: 101,
+            user_id: 'abcd1234',
+            collection_title: 'Top SF',
+            collection_created_at: '2026-11-14T20:00:00Z',
+            display_name: 'Alin',
+            book_id: 'gb_dune',
+            book_added_at: '2026-11-14T20:01:00Z',
+            title: 'Dune',
+            author: 'Frank Herbert',
+            isbn: '9780441172719',
+            number_of_pages: 688,
+            original_publication_year: 1965,
+            description: 'Arrakis sci-fi classic',
+            main_category: 'Fiction',
+            cover_url: 'https://books.google.com/dune.jpg',
+          },
+        ]
+      }
+      return []
     }
-    if (sqlText.includes('DELETE FROM collection_books')) {
-      return [{ collection_id: 101, book_id: 'gb_dune' }]
-    }
-    if (sqlText.includes('FROM collections c')) {
-      return [
-        {
-          collection_id: 101,
-          user_id: 'abcd1234',
-          collection_title: 'Top SF',
-          collection_created_at: '2026-11-14T20:00:00Z',
-          display_name: 'Alin',
-          book_id: 'gb_dune',
-          book_added_at: '2026-11-14T20:01:00Z',
-          title: 'Dune',
-          author: 'Frank Herbert',
-          isbn: '9780441172719',
-          number_of_pages: 688,
-          original_publication_year: 1965,
-          description: 'Arrakis sci-fi classic',
-          main_category: 'Fiction',
-          cover_url: 'https://books.google.com/dune.jpg',
+
+    // 1. Create collection (default public + 140 char description)
+    const createRes = createMockRes()
+    await collectionsHandler(
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: {
+          action: 'create',
+          userId: 'abcd1234',
+          title: 'Top SF',
+          description: 'My favorite sci-fi novels',
         },
-      ]
-    }
-    return []
-  }
-
-  // 1. Create collection (default public + 140 char description)
-  const createRes = createMockRes()
-  await collectionsHandler(
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: {
-        action: 'create',
-        userId: 'abcd1234',
-        title: 'Top SF',
-        description: 'My favorite sci-fi novels',
+        dbQuery: mockQuery,
       },
-      dbQuery: mockQuery,
-    },
-    createRes,
-  )
-  assert.equal(createRes.statusCode, 200)
-  assert.equal(createRes.payload.collection.id, '101')
-  assert.equal(createRes.payload.collection.title, 'Top SF')
-  assert.equal(createRes.payload.collection.description, 'My favorite sci-fi novels')
-  assert.equal(createRes.payload.collection.isPrivate, false)
+      createRes,
+    )
+    assert.equal(createRes.statusCode, 200)
+    assert.equal(createRes.payload.collection.id, '101')
+    assert.equal(createRes.payload.collection.title, 'Top SF')
+    assert.equal(createRes.payload.collection.description, 'My favorite sci-fi novels')
+    assert.equal(createRes.payload.collection.isPrivate, false)
 
-  // 2. Add book to collection
-  const addBookRes = createMockRes()
-  await collectionsHandler(
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: {
-        action: 'add-book',
-        userId: 'abcd1234',
-        collectionId: 101,
-        bookId: 'gb_dune',
-        book: {
-          title: 'Dune',
-          author: 'Frank Herbert',
-          isbn: '9780441172719',
-          pages: 688,
-          publishedYear: 1965,
-          description: 'Arrakis sci-fi classic',
-          mainCategory: 'Fiction',
-          coverUrl: 'https://books.google.com/dune.jpg',
+    // 2. Add book to collection
+    const addBookRes = createMockRes()
+    await collectionsHandler(
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: {
+          action: 'add-book',
+          userId: 'abcd1234',
+          collectionId: 101,
+          bookId: 'gb_dune',
+          book: {
+            title: 'Dune',
+            author: 'Frank Herbert',
+            isbn: '9780441172719',
+            pages: 688,
+            publishedYear: 1965,
+            description: 'Arrakis sci-fi classic',
+            mainCategory: 'Fiction',
+            coverUrl: 'https://books.google.com/dune.jpg',
+          },
         },
+        dbQuery: mockQuery,
       },
-      dbQuery: mockQuery,
-    },
-    addBookRes,
-  )
-  assert.equal(addBookRes.statusCode, 200)
-  assert.equal(addBookRes.payload.bookId, 'gb_dune')
+      addBookRes,
+    )
+    assert.equal(addBookRes.statusCode, 200)
+    assert.equal(addBookRes.payload.bookId, 'gb_dune')
 
-  // 3. Get user collections
-  const getUserRes = createMockRes()
-  await collectionsHandler(
-    {
-      method: 'GET',
-      query: { userId: 'abcd1234' },
-      dbQuery: mockQuery,
-    },
-    getUserRes,
-  )
-  assert.equal(getUserRes.statusCode, 200)
-  assert.equal(getUserRes.payload.collections.length, 1)
-  assert.equal(getUserRes.payload.collections[0].title, 'Top SF')
-  assert.equal(getUserRes.payload.collections[0].books.length, 1)
-  assert.equal(getUserRes.payload.collections[0].books[0].title, 'Dune')
+    // 3. Get user collections
+    const getUserRes = createMockRes()
+    await collectionsHandler(
+      {
+        method: 'GET',
+        query: { userId: 'abcd1234' },
+        dbQuery: mockQuery,
+      },
+      getUserRes,
+    )
+    assert.equal(getUserRes.statusCode, 200)
+    assert.equal(getUserRes.payload.collections.length, 1)
+    assert.equal(getUserRes.payload.collections[0].title, 'Top SF')
+    assert.equal(getUserRes.payload.collections[0].books.length, 1)
+    assert.equal(getUserRes.payload.collections[0].books[0].title, 'Dune')
 
-  // 4. Get explore collections
-  const getExploreRes = createMockRes()
-  await collectionsHandler(
-    {
-      method: 'GET',
-      query: { explore: 'true' },
-      dbQuery: mockQuery,
-    },
-    getExploreRes,
-  )
-  assert.equal(getExploreRes.statusCode, 200)
-  assert.equal(getExploreRes.payload.collections.length, 1)
-  assert.equal(getExploreRes.payload.collections[0].username, 'Alin')
+    // 4. Get explore collections
+    const getExploreRes = createMockRes()
+    await collectionsHandler(
+      {
+        method: 'GET',
+        query: { explore: 'true' },
+        dbQuery: mockQuery,
+      },
+      getExploreRes,
+    )
+    assert.equal(getExploreRes.statusCode, 200)
+    assert.equal(getExploreRes.payload.collections.length, 1)
+    assert.equal(getExploreRes.payload.collections[0].username, 'Alin')
 
-  // 5. Remove book from collection
-  const removeBookRes = createMockRes()
-  await collectionsHandler(
-    {
-      method: 'DELETE',
-      headers: { 'content-type': 'application/json' },
-      body: { userId: 'abcd1234', collectionId: 101, bookId: 'gb_dune' },
-      dbQuery: mockQuery,
-    },
-    removeBookRes,
-  )
-  assert.equal(removeBookRes.statusCode, 200)
-  assert.equal(removeBookRes.payload.removed, true)
-})
+    // 5. Remove book from collection
+    const removeBookRes = createMockRes()
+    await collectionsHandler(
+      {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: { userId: 'abcd1234', collectionId: 101, bookId: 'gb_dune' },
+        dbQuery: mockQuery,
+      },
+      removeBookRes,
+    )
+    assert.equal(removeBookRes.statusCode, 200)
+    assert.equal(removeBookRes.payload.removed, true)
+  })
 
 test('collections endpoint toggles collection privacy between private and public', async () => {
   let isPrivateState = false
@@ -2990,6 +2992,116 @@ test('collections endpoint updates collection title via PATCH, POST, and direct 
   )
   assert.equal(emptyRes.statusCode, 400)
   assert.match(emptyRes.payload.error, /title is required/i)
+
+  // 5. Update title, description, and privacy together via PATCH
+  const fullMockQuery = async (sqlText, values) => {
+    if (sqlText.includes('UPDATE collections')) {
+      dbCollection = {
+        ...dbCollection,
+        title: values[0],
+        description: values[1],
+        is_private: values[2],
+        updated_at: '2026-03-03T00:00:00Z',
+      }
+      return [dbCollection]
+    }
+    return []
+  }
+
+  const editRes = createMockRes()
+  await collectionsHandler(
+    {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: {
+        userId: 'abcd1234',
+        collectionId: '101',
+        title: 'SF & Fantasy Edit',
+        description: 'Descriere nouă',
+        isPrivate: true,
+      },
+      dbQuery: fullMockQuery,
+    },
+    editRes,
+  )
+  assert.equal(editRes.statusCode, 200)
+  assert.equal(editRes.payload.success, true)
+  assert.equal(editRes.payload.title, 'SF & Fantasy Edit')
+  assert.equal(editRes.payload.isPrivate, true)
+})
+
+test('collections endpoint supports lightweight summaries and book membership checks', async () => {
+  const collectionsTable = [
+    { collection_id: '201', user_id: 'user1234', title: 'Top Sci-Fi' },
+    { collection_id: '202', user_id: 'user1234', title: 'Favorit 2026' },
+  ]
+  const collectionBooksTable = [
+    { collection_id: '201', book_id: 'book-999' },
+  ]
+
+  const mockQuery = async (sql, values = []) => {
+    if (sql.includes('SELECT collection_id, title FROM collections WHERE user_id = $1')) {
+      return collectionsTable.filter((c) => c.user_id === values[0])
+    }
+    if (sql.includes('SELECT DISTINCT c.collection_id')) {
+      // values: [userId, bookId, isbn]
+      const [uId, bId, isbn] = values
+      return collectionBooksTable
+        .filter((cb) => cb.book_id === bId)
+        .map((cb) => ({ collection_id: cb.collection_id }))
+    }
+    return []
+  }
+
+  // 1. Direct getUserCollectionSummaries
+  const summaries = await getUserCollectionSummaries({ userId: 'user1234', queryFn: mockQuery })
+  assert.equal(summaries.length, 2)
+  assert.equal(summaries[0].id, '201')
+  assert.equal(summaries[0].title, 'Top Sci-Fi')
+
+  // 2. Direct getBookCollectionIds
+  const colIds = await getBookCollectionIds({
+    userId: 'user1234',
+    bookId: 'book-999',
+    queryFn: mockQuery,
+  })
+  assert.deepEqual(colIds, ['201'])
+
+  const emptyColIds = await getBookCollectionIds({
+    userId: 'user1234',
+    bookId: 'book-nonexistent',
+    queryFn: mockQuery,
+  })
+  assert.deepEqual(emptyColIds, [])
+
+  // 3. Handler GET with summary=true
+  const summaryRes = createMockRes()
+  await collectionsHandler(
+    {
+      method: 'GET',
+      query: { userId: 'user1234', summary: 'true' },
+      dbQuery: mockQuery,
+    },
+    summaryRes,
+  )
+  assert.equal(summaryRes.statusCode, 200)
+  assert.equal(summaryRes.payload.success, true)
+  assert.equal(summaryRes.payload.collections.length, 2)
+  assert.equal(summaryRes.payload.collections[1].title, 'Favorit 2026')
+
+  // 4. Handler GET with bookId
+  const bookCheckRes = createMockRes()
+  await collectionsHandler(
+    {
+      method: 'GET',
+      query: { userId: 'user1234', bookId: 'book-999' },
+      dbQuery: mockQuery,
+    },
+    bookCheckRes,
+  )
+  assert.equal(bookCheckRes.statusCode, 200)
+  assert.equal(bookCheckRes.payload.success, true)
+  assert.deepEqual(bookCheckRes.payload.collectionIds, ['201'])
 })
 
 test('isbn endpoint server-side check skips Google Books if google_books_queried is already true in DB', async () => {

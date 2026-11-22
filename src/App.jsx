@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
-import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FileText, Globe, Library, Loader2, Lock, LogOut, Pencil, Plus, QrCode, Save, Search, Share2, Star, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
+import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FileText, Globe, Library, Loader2, Lock, LogOut, MoreVertical, Pencil, Plus, QrCode, Save, Search, Share2, Star, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
 import PeekRating from './components/PeekRating'
 import {
   buildBookShareUrl,
@@ -245,14 +245,13 @@ function BookCoverCard({
 function CollectionRow({
   collection,
   isOwner,
+  isExplore = false,
   showCreator,
   onSelectCreator,
   onAddBookClick,
   onDeleteCollection,
-  onTogglePrivacy,
-  isTogglingPrivacy,
   onBookClick,
-  onUpdateTitle,
+  onEditCollection,
 }) {
   const rowContainerRef = useRef(null)
   const rowCarouselRef = useRef(null)
@@ -260,30 +259,33 @@ function CollectionRow({
   const rowTapMovedRef = useRef(false)
   const [isRowInView, setIsRowInView] = useState(false)
 
-  const [isEditingTitle, setIsEditingTitle] = useState(false)
-  const [titleInput, setTitleInput] = useState(collection.title || '')
-  const [isSavingTitle, setIsSavingTitle] = useState(false)
-  const titleInputRef = useRef(null)
-  const titleLineRef = useRef(null)
-
   const [showDeletePopup, setShowDeletePopup] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const menuContainerRef = useRef(null)
 
   useEffect(() => {
-    if (!isEditingTitle) return undefined
+    if (!isMenuOpen) return undefined
 
     const handlePointerDownOutside = (event) => {
-      if (titleLineRef.current && !titleLineRef.current.contains(event.target)) {
-        setTitleInput(collection.title || '')
-        setIsEditingTitle(false)
+      if (menuContainerRef.current && !menuContainerRef.current.contains(event.target)) {
+        setIsMenuOpen(false)
+      }
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setIsMenuOpen(false)
       }
     }
 
     document.addEventListener('pointerdown', handlePointerDownOutside)
+    document.addEventListener('keydown', handleKeyDown)
     return () => {
       document.removeEventListener('pointerdown', handlePointerDownOutside)
+      document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [isEditingTitle, collection.title])
+  }, [isMenuOpen])
 
   useEffect(() => {
     if (!showDeletePopup) return undefined
@@ -307,67 +309,12 @@ function CollectionRow({
     }
   }
 
-  useEffect(() => {
-    if (!isEditingTitle) {
-      setTitleInput(collection.title || '')
-    }
-  }, [collection.title, isEditingTitle])
-
-  useEffect(() => {
-    if (isEditingTitle && titleInputRef.current) {
-      titleInputRef.current.focus()
-      titleInputRef.current.select()
-    }
-  }, [isEditingTitle])
-
-  const handleStartEditTitle = (e) => {
-    e?.preventDefault?.()
-    e?.stopPropagation?.()
-    setTitleInput(collection.title || '')
-    setIsEditingTitle(true)
-  }
-
-  const handleSaveTitle = async (e) => {
-    e?.preventDefault?.()
-    e?.stopPropagation?.()
-    const trimmed = titleInput.trim()
-    if (!trimmed) {
-      setTitleInput(collection.title || '')
-      setIsEditingTitle(false)
-      return
-    }
-    if (trimmed === collection.title) {
-      setIsEditingTitle(false)
-      return
-    }
-    setIsSavingTitle(true)
-    try {
-      const ok = await onUpdateTitle?.(collection, trimmed)
-      if (ok !== false) {
-        setIsEditingTitle(false)
-      }
-    } catch {
-      // ignore
-    } finally {
-      setIsSavingTitle(false)
-    }
-  }
-
-  const handleTitleKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      handleSaveTitle()
-    } else if (e.key === 'Escape') {
-      e.preventDefault()
-      setTitleInput(collection.title || '')
-      setIsEditingTitle(false)
-    }
-  }
-
   const normalizedBooks = useMemo(
     () => (Array.isArray(collection.books) ? collection.books.map((b, idx) => normalizeCsvBook(b, idx)) : []),
     [collection.books],
   )
+  const bookCount = normalizedBooks.length
+  const countLabel = `${bookCount} ${bookCount === 1 ? 'carte' : 'cărți'}`
 
   useEffect(() => {
     const el = rowContainerRef.current
@@ -454,86 +401,33 @@ function CollectionRow({
     <div ref={rowContainerRef} className="collection-row-card">
       <div className="collection-row-header">
         <div className="collection-row-title-group">
-          <div ref={titleLineRef} className="collection-row-title-line">
-            {isEditingTitle ? (
-              <input
-                ref={titleInputRef}
-                type="text"
-                className="collection-row-title-input"
-                value={titleInput}
-                onChange={(e) => setTitleInput(e.target.value)}
-                onKeyDown={handleTitleKeyDown}
-                disabled={isSavingTitle}
-                placeholder="Titlu colecție..."
-                maxLength={100}
-                aria-label="Titlu colecție"
-              />
-            ) : (
-              <h3 className="collection-row-title">{collection.title}</h3>
+          <div className="collection-row-title-line">
+            {!isExplore && (
+              collection.isPrivate ? (
+                <span
+                  className="collection-row-privacy-icon is-private"
+                  title="Colecție privată (vizibilă doar pentru tine)"
+                  aria-label="Colecție privată"
+                >
+                  <Lock size={15} />
+                </span>
+              ) : isOwner ? (
+                <span
+                  className="collection-row-privacy-icon is-public"
+                  title="Colecție publică (vizibilă pe Explorează)"
+                  aria-label="Colecție publică"
+                >
+                  <Globe size={15} />
+                </span>
+              ) : null
             )}
-            {isOwner ? (
-              <button
-                type="button"
-                className={`collection-edit-title-btn ${isEditingTitle ? 'is-editing' : ''}`}
-                onClick={isEditingTitle ? handleSaveTitle : handleStartEditTitle}
-                disabled={isSavingTitle}
-                title={isEditingTitle ? 'Salvează titlul' : 'Editează titlul'}
-                aria-label={isEditingTitle ? 'Salvează titlul' : 'Editează titlul'}
-              >
-                {isSavingTitle ? (
-                  <Loader2 size={13} className="spin" />
-                ) : isEditingTitle ? (
-                  <Save size={14} />
-                ) : (
-                  <Pencil size={13} />
-                )}
-              </button>
-            ) : null}
+            <h3 className="collection-row-title">{collection.title}</h3>
           </div>
           <div className="collection-row-meta-line">
-            {isOwner ? (
-              <button
-                type="button"
-                className={`collection-row-privacy-btn ${collection.isPrivate ? 'is-private' : 'is-public'}`}
-                onClick={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  onTogglePrivacy?.(collection)
-                }}
-                disabled={isTogglingPrivacy}
-                title={
-                  collection.isPrivate
-                    ? 'Colecție privată. Apasă pentru a o face publică'
-                    : 'Colecție publică. Apasă pentru a o face privată'
-                }
-                aria-label={
-                  collection.isPrivate
-                    ? 'Colecție privată. Schimbă în publică'
-                    : 'Colecție publică. Schimbă în privată'
-                }
-              >
-                {collection.isPrivate ? <Lock size={12} /> : <Globe size={12} />}
-                <span>{collection.isPrivate ? 'Privată' : 'Publică'}</span>
-              </button>
-            ) : collection.isPrivate ? (
-              <span className="collection-row-private-badge" title="Vizibilă doar pentru tine">
-                <Lock size={12} />
-                <span>Privată</span>
-              </span>
-            ) : null}
-            {isOwner ? (
-              <button
-                type="button"
-                className="collection-row-delete-btn"
-                onClick={() => setShowDeletePopup(true)}
-                aria-label={`Șterge colecția ${collection.title}`}
-                title="Șterge colecția"
-              >
-                <Trash2 size={12} />
-                <span>Șterge</span>
-              </button>
-            ) : null}
-            {showCreator && !isOwner ? (
+            <span className="collection-row-count" title={countLabel}>
+              {countLabel}
+            </span>
+            {showCreator && collection.username ? (
               <button
                 type="button"
                 className="collection-row-creator-btn"
@@ -546,17 +440,83 @@ function CollectionRow({
           </div>
         </div>
 
-        {isOwner ? (
-          <div className="collection-row-actions">
+        {isOwner && !isExplore ? (
+          <div className="collection-row-actions" ref={menuContainerRef}>
             <button
               type="button"
-              className="collection-add-book-btn"
-              onClick={() => onAddBookClick?.(collection)}
-              title={`Adaugă o carte în „${collection.title}”`}
+              className={`collection-menu-trigger-btn ${isMenuOpen ? 'open' : ''}`}
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setIsMenuOpen((prev) => !prev)
+              }}
+              title="Opțiuni colecție"
+              aria-label="Opțiuni colecție"
+              aria-haspopup="menu"
+              aria-expanded={isMenuOpen}
             >
-              <Plus size={15} />
+              <MoreVertical size={18} />
             </button>
+
+            {isMenuOpen && (
+              <div
+                className="collection-actions-menu"
+                role="menu"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="collection-menu-item"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setIsMenuOpen(false)
+                    onAddBookClick?.(collection)
+                  }}
+                >
+                  <Plus size={16} />
+                  <span>Adaugă o carte</span>
+                </button>
+
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="collection-menu-item"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setIsMenuOpen(false)
+                    onEditCollection?.(collection)
+                  }}
+                >
+                  <Pencil size={15} />
+                  <span>Editează colecția</span>
+                </button>
+
+                <div className="collection-menu-divider" role="separator" />
+
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="collection-menu-item collection-menu-item-danger"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setIsMenuOpen(false)
+                    setShowDeletePopup(true)
+                  }}
+                >
+                  <Trash2 size={15} />
+                  <span>Șterge colecția</span>
+                </button>
+              </div>
+            )}
           </div>
+        ) : null}
+
+        {collection.description ? (
+          <p className="collection-row-description">{collection.description}</p>
         ) : null}
       </div>
 
@@ -601,14 +561,10 @@ function CollectionRow({
         </div>
       )}
 
-      {collection.description ? (
-        <p className="collection-row-description">{collection.description}</p>
-      ) : null}
-
       {normalizedBooks.length === 0 ? (
         <div className="collection-row-empty">
           <span>Nicio carte în această colecție încă.</span>
-          {isOwner ? (
+          {isOwner && !isExplore ? (
             <button
               type="button"
               className="collection-empty-add-btn"
@@ -895,16 +851,28 @@ function App() {
   const [newCollectionTitle, setNewCollectionTitle] = useState('')
   const [newCollectionDescription, setNewCollectionDescription] = useState('')
   const [newCollectionIsPrivate, setNewCollectionIsPrivate] = useState(false)
+  const [newCollectionError, setNewCollectionError] = useState('')
   const [isCreatingCollection, setIsCreatingCollection] = useState(false)
+  const [editingCollection, setEditingCollection] = useState(null)
+  const [editCollectionTitle, setEditCollectionTitle] = useState('')
+  const [editCollectionDescription, setEditCollectionDescription] = useState('')
+  const [editCollectionIsPrivate, setEditCollectionIsPrivate] = useState(false)
+  const [editCollectionError, setEditCollectionError] = useState('')
+  const [isSavingEditCollection, setIsSavingEditCollection] = useState(false)
   const [targetCollectionForSearch, setTargetCollectionForSearch] = useState(null)
   const [activeModalCollection, setActiveModalCollection] = useState(null)
   const [isAddingBookToCollection, setIsAddingBookToCollection] = useState(false)
   const [isRemovingFromCollection, setIsRemovingFromCollection] = useState(false)
   const [collectionsRefreshTrigger, setCollectionsRefreshTrigger] = useState(0)
+  const [userCollectionSummaries, setUserCollectionSummaries] = useState([])
+  const [selectedBookCollectionIds, setSelectedBookCollectionIds] = useState(new Set())
+  const [collectionActionInProgressId, setCollectionActionInProgressId] = useState(null)
   const shelfDropdownRef = useRef(null)
   const enrichingBookIdsRef = useRef(new Set())
   const [userShelvesByBookId, setUserShelvesByBookId] = useState({})
   const [isLoading, setIsLoading] = useState(true)
+  const [isShelfReady, setIsShelfReady] = useState(false)
+  const [bookRenderLimit, setBookRenderLimit] = useState(50)
   const [booksFetchTrigger, setBooksFetchTrigger] = useState(0)
   const availableBookSortOptions = useMemo(() => getBookSortOptions(activeShelf), [activeShelf])
   const [error, setError] = useState('')
@@ -916,6 +884,14 @@ function App() {
   const loadedUserIdRef = useRef(null)
   const syncedAuthUserIdRef = useRef(null)
   const nameInputRef = useRef(null)
+
+  // In-memory caches to prevent refetching rafturi (books) and collections across tab switches
+  const booksByUserIdCacheRef = useRef(new Map())
+  const collectionsByUserIdCacheRef = useRef(new Map())
+  const hasLoadedExploreCollectionsRef = useRef(false)
+  const lastBooksFetchTriggerRef = useRef(0)
+  const lastUserCollectionsRefreshTriggerRef = useRef(0)
+  const lastExploreCollectionsRefreshTriggerRef = useRef(0)
 
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768)
   const isInitialRootUrlRef = useRef(
@@ -939,6 +915,7 @@ function App() {
     directionLocked: null,
   })
   const modalCardRef = useRef(null)
+  const profileModalBackdropPointerDownRef = useRef(false)
 
   const isUserLoggedIn = useMemo(() => {
     if (isSupabaseConfigured()) {
@@ -984,11 +961,11 @@ function App() {
   }, [isVisitingOtherUser])
 
   const isOwnCollectionModal = useMemo(() => {
-    if (!activeModalCollection || !isUserLoggedIn) return false
+    if (isExploreMode || !activeModalCollection || !isUserLoggedIn) return false
     const activeUser = cookieUserId || getUserIdFromCookie()
     if (!activeUser) return false
     return String(activeModalCollection.userId) === String(activeUser)
-  }, [activeModalCollection, isUserLoggedIn, cookieUserId])
+  }, [activeModalCollection, isUserLoggedIn, cookieUserId, isExploreMode])
 
   const isSwipableModal = useMemo(() => {
     if (activeModalCollection) {
@@ -1033,14 +1010,44 @@ function App() {
 
   useEffect(() => {
     if (activeShelf !== 'collections' || !currentUserId) return
+
+    const isTriggerBumped = collectionsRefreshTrigger !== lastUserCollectionsRefreshTriggerRef.current
+    if (isTriggerBumped) {
+      lastUserCollectionsRefreshTriggerRef.current = collectionsRefreshTrigger
+      collectionsByUserIdCacheRef.current.delete(currentUserId)
+    }
+
+    if (!isTriggerBumped && collectionsByUserIdCacheRef.current.has(currentUserId)) {
+      const cached = collectionsByUserIdCacheRef.current.get(currentUserId)
+      if (userCollections !== cached) {
+        setUserCollections(cached)
+        if (isOwnProfile) {
+          setUserCollectionSummaries(
+            cached.map((c) => ({ id: String(c.id), title: c.title })),
+          )
+        }
+      }
+      setIsLoadingCollections(false)
+      return undefined
+    }
+
     let isCancelled = false
     setIsLoadingCollections(true)
     const includePrivateParam = isOwnProfile ? '1' : '0'
-    fetch(`/api/collections?userId=${encodeURIComponent(currentUserId)}&includePrivate=${includePrivateParam}`)
+    fetch(
+      `/api/collections?userId=${encodeURIComponent(currentUserId)}&includePrivate=${includePrivateParam}&_t=${Date.now()}`,
+      { cache: 'no-cache' },
+    )
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (!isCancelled && Array.isArray(data?.collections)) {
+          collectionsByUserIdCacheRef.current.set(currentUserId, data.collections)
           setUserCollections(data.collections)
+          if (isOwnProfile) {
+            setUserCollectionSummaries(
+              data.collections.map((c) => ({ id: String(c.id), title: c.title })),
+            )
+          }
         }
       })
       .catch((err) => {
@@ -1055,14 +1062,37 @@ function App() {
     }
   }, [activeShelf, currentUserId, isOwnProfile, collectionsRefreshTrigger])
 
+  // Keep collection cache updated when userCollections state changes in memory
+  useEffect(() => {
+    if (currentUserId && collectionsByUserIdCacheRef.current.has(currentUserId)) {
+      const cached = collectionsByUserIdCacheRef.current.get(currentUserId)
+      if (cached !== userCollections) {
+        collectionsByUserIdCacheRef.current.set(currentUserId, userCollections)
+      }
+    }
+  }, [currentUserId, userCollections])
+
   useEffect(() => {
     if (!isExploreMode) return
+
+    const isTriggerBumped = collectionsRefreshTrigger !== lastExploreCollectionsRefreshTriggerRef.current
+    if (isTriggerBumped) {
+      lastExploreCollectionsRefreshTriggerRef.current = collectionsRefreshTrigger
+      hasLoadedExploreCollectionsRef.current = false
+    }
+
+    if (!isTriggerBumped && hasLoadedExploreCollectionsRef.current) {
+      setIsLoadingCollections(false)
+      return undefined
+    }
+
     let isCancelled = false
     setIsLoadingCollections(true)
-    fetch('/api/collections?explore=true')
+    fetch(`/api/collections?explore=true&_t=${Date.now()}`, { cache: 'no-cache' })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (!isCancelled && Array.isArray(data?.collections)) {
+          hasLoadedExploreCollectionsRef.current = true
           setExploreCollections(data.collections)
         }
       })
@@ -1130,6 +1160,9 @@ function App() {
       if (data.description !== undefined) {
         setDescriptionInput(data.description || '')
         setUserDescription(data.description || '')
+      }
+      if (Array.isArray(data.collections)) {
+        setUserCollectionSummaries(data.collections)
       }
 
       if (nextUrl) {
@@ -1316,6 +1349,9 @@ function App() {
       await supabase.auth.signOut()
       syncedAuthUserIdRef.current = null
       loadedUserIdRef.current = null
+      booksByUserIdCacheRef.current.clear()
+      collectionsByUserIdCacheRef.current.clear()
+      hasLoadedExploreCollectionsRef.current = false
       if (typeof document !== 'undefined') {
         document.cookie = 'userId=; path=/; max-age=0; SameSite=Lax'
       }
@@ -1327,6 +1363,8 @@ function App() {
       setDescriptionInput('')
       setBooks([])
       setUserCollections([])
+      setUserCollectionSummaries([])
+      setSelectedBookCollectionIds(new Set())
       setIsExploreMode(true)
       setSelectedBook(null)
       setActiveModalCollection(null)
@@ -1377,7 +1415,7 @@ function App() {
         setIsExploreMode(true)
         setRequestedBookId('')
         setSelectedBook(null)
-        const ownId = cookieUserId || getUserIdFromCookie() || ''
+        const ownId = isUserLoggedIn ? (cookieUserId || getUserIdFromCookie() || '') : ''
         setCurrentUserId(ownId)
         if (!ownId) {
           setUsername('')
@@ -1390,6 +1428,9 @@ function App() {
       setCurrentUserId(userId)
       setActiveShelf(shelf)
       setRequestedBookId(bookId)
+      if (shelf !== 'collections') {
+        setIsShelfReady(false)
+      }
     }
 
     window.addEventListener('popstate', syncRouteState)
@@ -1413,18 +1454,56 @@ function App() {
 
     const controller = new AbortController()
     const resolvedUserId = currentUserId
+
+    const isTriggerBumped = booksFetchTrigger !== lastBooksFetchTriggerRef.current
+    if (isTriggerBumped) {
+      lastBooksFetchTriggerRef.current = booksFetchTrigger
+      booksByUserIdCacheRef.current.delete(resolvedUserId)
+    }
+
+    if (!isTriggerBumped && booksByUserIdCacheRef.current.has(resolvedUserId)) {
+      const cached = booksByUserIdCacheRef.current.get(resolvedUserId)
+      if (loadedUserIdRef.current !== resolvedUserId || books !== cached.books) {
+        setBooks(cached.books)
+        if (cached.username) {
+          setUsername(cached.username)
+          if (!supabaseUserRef.current) {
+            setDisplayNameInput((prev) => prev || cached.username)
+          }
+        }
+        if (cached.description !== undefined) {
+          setUserDescription(cached.description)
+          if (!supabaseUserRef.current) {
+            setDescriptionInput((prev) => prev || cached.description)
+          }
+        }
+      }
+      loadedUserIdRef.current = resolvedUserId
+      setTimeout(() => {
+        setIsLoading(false)
+        setIsShelfReady(true)
+      }, 100)
+      return undefined
+    }
+
     const apiUrl = `${buildGoodreadsApiUrl(resolvedUserId)}${booksFetchTrigger ? `?t=${Date.now()}` : ''}`
     const isSwitchingUser = loadedUserIdRef.current !== resolvedUserId
+
+    setIsLoading(true)
 
     const loadBooks = async () => {
       try {
         if (isSwitchingUser) {
-          setIsLoading(true)
           setUsername('')
         }
         setError('')
         const { books: apiBooks, username: apiUsername, description: apiDescription } = await fetchBooksFromApi(apiUrl, controller.signal)
         loadedUserIdRef.current = resolvedUserId
+        booksByUserIdCacheRef.current.set(resolvedUserId, {
+          books: apiBooks,
+          username: apiUsername,
+          description: apiDescription,
+        })
         setBooks(apiBooks)
         if (apiUsername) {
           setUsername(apiUsername)
@@ -1444,7 +1523,10 @@ function App() {
         setError('Ups! Nu am găsit nimic la această adresă.')
       } finally {
         if (!controller.signal.aborted) {
-          setIsLoading(false)
+          setTimeout(() => {
+            setIsLoading(false)
+            setIsShelfReady(true)
+          }, 150)
         }
       }
     }
@@ -1455,6 +1537,66 @@ function App() {
       controller.abort()
     }
   }, [currentUserId, isExploreMode, booksFetchTrigger])
+
+  // Prefetch books in background as soon as user ID is available so "Rafturi" opens instantly
+  useEffect(() => {
+    const activeUser = currentUserId || cookieUserId || getUserIdFromCookie()
+    if (!activeUser) return
+    const activeUserStr = String(activeUser)
+    if (booksByUserIdCacheRef.current.has(activeUserStr)) return
+
+    let isCancelled = false
+    const apiUrl = buildGoodreadsApiUrl(activeUserStr)
+
+    fetchBooksFromApi(apiUrl)
+      .then(({ books: apiBooks, username: apiUsername, description: apiDescription }) => {
+        if (isCancelled) return
+        booksByUserIdCacheRef.current.set(activeUserStr, {
+          books: apiBooks,
+          username: apiUsername,
+          description: apiDescription,
+        })
+        if (!isExploreMode && activeShelf !== 'collections' && String(currentUserId) === activeUserStr) {
+          setBooks(apiBooks)
+          if (apiUsername) {
+            setUsername(apiUsername)
+            if (!supabaseUserRef.current) {
+              setDisplayNameInput((prev) => prev || apiUsername)
+            }
+          }
+          if (apiDescription !== undefined) {
+            setUserDescription(apiDescription)
+            if (!supabaseUserRef.current) {
+              setDescriptionInput((prev) => prev || apiDescription)
+            }
+          }
+          setTimeout(() => {
+            setIsLoading(false)
+            setIsShelfReady(true)
+          }, 150)
+        }
+      })
+      .catch((err) => {
+        console.warn('Background books prefetch notice:', err)
+      })
+
+    return () => {
+      isCancelled = true
+    }
+  }, [currentUserId, cookieUserId, isExploreMode, activeShelf])
+
+  // Keep cached books in sync when books state changes in memory
+  useEffect(() => {
+    if (currentUserId && loadedUserIdRef.current === currentUserId && booksByUserIdCacheRef.current.has(currentUserId)) {
+      const cached = booksByUserIdCacheRef.current.get(currentUserId)
+      if (cached && cached.books !== books) {
+        booksByUserIdCacheRef.current.set(currentUserId, {
+          ...cached,
+          books,
+        })
+      }
+    }
+  }, [currentUserId, books])
 
   const prevSortShelfRef = useRef(activeShelf)
 
@@ -1683,6 +1825,84 @@ function App() {
     }
   }, [selectedBook, loggedInUserBook, activeShelf])
 
+  // Ensure user collection summaries are loaded whenever a logged-in user session is active
+  useEffect(() => {
+    const activeUser = getActiveCollectionUserId()
+    if (!activeUser || !supabaseUser || userCollectionSummaries.length > 0) return
+
+    let isSubscribed = true
+    fetch(`/api/collections?userId=${encodeURIComponent(activeUser)}&summary=true`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!isSubscribed || !Array.isArray(data?.collections)) return
+        setUserCollectionSummaries(data.collections)
+      })
+      .catch(() => { })
+
+    return () => {
+      isSubscribed = false
+    }
+  }, [supabaseUser, cookieUserId, userCollectionSummaries.length])
+
+  // Track which collections contain the currently selected book
+  useEffect(() => {
+    if (!selectedBook) {
+      setSelectedBookCollectionIds(new Set())
+      return
+    }
+
+    const activeUser = getActiveCollectionUserId()
+    if (!activeUser || !supabaseUser) {
+      setSelectedBookCollectionIds(new Set())
+      return
+    }
+
+    const bookId = String(selectedBook.bookId || selectedBook.id || '')
+    const isbn = String(selectedBook.isbn || selectedBook.isbn13 || '')
+      .replace(/[^0-9X]/gi, '')
+      .trim()
+
+    // 1. Initial instant check from collections loaded in memory
+    const initialIds = new Set()
+    userCollections.forEach((c) => {
+      if (
+        c.books?.some((b) => {
+          const bId = String(b.bookId || b.id || '')
+          const bIsbn = String(b.isbn || b.isbn13 || '')
+            .replace(/[^0-9X]/gi, '')
+            .trim()
+          return (bookId && bId === bookId) || (isbn && bIsbn === isbn)
+        })
+      ) {
+        initialIds.add(String(c.id))
+      }
+    })
+    setSelectedBookCollectionIds(initialIds)
+
+    // 2. Fetch authoritative collection IDs from server
+    let isCancelled = false
+    const queryParams = new URLSearchParams({
+      userId: activeUser,
+      bookId,
+    })
+    if (isbn) queryParams.set('isbn', isbn)
+
+    fetch(`/api/collections?${queryParams.toString()}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!isCancelled && Array.isArray(data?.collectionIds)) {
+          setSelectedBookCollectionIds(new Set(data.collectionIds.map(String)))
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to fetch book collection memberships:', err)
+      })
+
+    return () => {
+      isCancelled = true
+    }
+  }, [selectedBook, supabaseUser])
+
   const shelfCounts = useMemo(() => {
     const counts = {}
     const hasSearch = Boolean(bookSearchQuery.trim())
@@ -1790,6 +2010,20 @@ function App() {
       return bookB.title.localeCompare(bookA.title)
     })
   }, [activeBookSort, activeSort, filteredBooks])
+
+  useEffect(() => {
+    if (!isShelfReady) {
+      setBookRenderLimit(50)
+      return undefined
+    }
+
+    if (bookRenderLimit < visibleBooks.length) {
+      const timer = setTimeout(() => {
+        setBookRenderLimit((prev) => Math.min(visibleBooks.length, prev + 80))
+      }, 50)
+      return () => clearTimeout(timer)
+    }
+  }, [isShelfReady, bookRenderLimit, visibleBooks.length])
 
   useEffect(() => {
     if (!carouselRef.current) {
@@ -1932,13 +2166,43 @@ function App() {
     }
   }
 
+  const getActiveCollectionUserId = () => {
+    return (
+      cookieUserId ||
+      getUserIdFromCookie() ||
+      (currentUserId && /^[a-zA-Z0-9]{8}$/.test(currentUserId) ? currentUserId : '')
+    )
+  }
+
   const handleCreateCollection = async (e) => {
     if (e) e.preventDefault()
     const title = newCollectionTitle.trim()
     const description = newCollectionDescription.trim().slice(0, 140)
-    const activeUser = cookieUserId || getUserIdFromCookie()
-    if (!title || !activeUser) return
+    let activeUser = getActiveCollectionUserId()
 
+    if (!title) {
+      setNewCollectionError('Titlul colecției este obligatoriu.')
+      return
+    }
+
+    if (!activeUser && supabaseUser) {
+      try {
+        const synced = await syncUserProfileWithServer(supabaseUser)
+        if (synced?.userId) {
+          activeUser = synced.userId
+        }
+      } catch (syncErr) {
+        console.warn('Failed to sync profile before collection creation:', syncErr)
+      }
+    }
+
+    if (!activeUser) {
+      setNewCollectionError('Trebuie să fii conectat pentru a crea o colecție.')
+      setShowProfileModal(true)
+      return
+    }
+
+    setNewCollectionError('')
     try {
       setIsCreatingCollection(true)
       const response = await fetch('/api/collections', {
@@ -1952,27 +2216,48 @@ function App() {
           isPrivate: newCollectionIsPrivate,
         }),
       })
+
       if (!response.ok) {
-        throw new Error(`Failed to create collection: status ${response.status}`)
+        let errMessage = `Eroare la crearea colecției (status ${response.status})`
+        try {
+          const errData = await response.json()
+          if (errData?.error) errMessage = errData.error
+        } catch {
+          // ignore
+        }
+        throw new Error(errMessage)
       }
+
       const data = await response.json()
       if (data?.collection) {
-        setUserCollections((prev) => [{ ...data.collection, username, books: [] }, ...prev])
+        const creatorName = username || displayNameInput || ''
+        const newCol = { ...data.collection, username: creatorName, books: [] }
+        setUserCollections((prev) => [newCol, ...prev])
+        const summaryId = String(newCol.id || newCol.collectionId)
+        setUserCollectionSummaries((prev) => [
+          { id: summaryId, title: newCol.title },
+          ...prev.filter((c) => String(c.id) !== summaryId),
+        ])
+        if (!newCollectionIsPrivate) {
+          setExploreCollections((prev) => [newCol, ...prev])
+        }
       }
       setNewCollectionTitle('')
       setNewCollectionDescription('')
       setNewCollectionIsPrivate(false)
+      setNewCollectionError('')
       setShowNewCollectionInput(false)
       setCollectionsRefreshTrigger((prev) => prev + 1)
     } catch (err) {
       console.error('Error creating collection:', err)
+      setNewCollectionError(err?.message || 'Nu am putut crea colecția.')
     } finally {
       setIsCreatingCollection(false)
     }
   }
 
   const handleDeleteCollection = async (collection) => {
-    const activeUser = cookieUserId || getUserIdFromCookie()
+    const activeUser = getActiveCollectionUserId()
     if (!collection?.id || !activeUser) return
 
     try {
@@ -1988,6 +2273,7 @@ function App() {
         throw new Error(`Failed to delete collection: status ${response.status}`)
       }
       setUserCollections((prev) => prev.filter((c) => Number(c.id) !== Number(collection.id)))
+      setUserCollectionSummaries((prev) => prev.filter((c) => Number(c.id) !== Number(collection.id)))
       setExploreCollections((prev) => prev.filter((c) => Number(c.id) !== Number(collection.id)))
     } catch (err) {
       console.error('Error deleting collection:', err)
@@ -1997,7 +2283,7 @@ function App() {
   const [togglingPrivacyCollectionId, setTogglingPrivacyCollectionId] = useState(null)
 
   const handleToggleCollectionPrivacy = async (collection) => {
-    const activeUser = cookieUserId || getUserIdFromCookie()
+    const activeUser = getActiveCollectionUserId()
     if (!collection?.id || !activeUser || togglingPrivacyCollectionId) return
 
     const collectionId = String(collection.id)
@@ -2064,28 +2350,89 @@ function App() {
     }
   }
 
-  const handleUpdateCollectionTitle = async (collection, newTitle) => {
-    const activeUser = cookieUserId || getUserIdFromCookie()
-    if (!collection?.id || !activeUser) return false
+  const handleOpenEditCollection = (collection) => {
+    if (!collection) return
+    setEditingCollection(collection)
+    setEditCollectionTitle(collection.title || '')
+    setEditCollectionDescription(collection.description || '')
+    setEditCollectionIsPrivate(Boolean(collection.isPrivate))
+    setEditCollectionError('')
+  }
 
-    const collectionId = String(collection.id)
-    const cleanTitle = String(newTitle || '').trim()
-    if (!cleanTitle || cleanTitle === collection.title) {
-      return true
+  const handleCloseEditCollection = () => {
+    setEditingCollection(null)
+    setEditCollectionTitle('')
+    setEditCollectionDescription('')
+    setEditCollectionIsPrivate(false)
+    setEditCollectionError('')
+    setIsSavingEditCollection(false)
+  }
+
+  const handleSaveEditCollection = async (e) => {
+    if (e) e.preventDefault()
+    if (!editingCollection) return
+
+    const title = editCollectionTitle.trim()
+    const description = editCollectionDescription.trim().slice(0, 140)
+    const isPrivate = Boolean(editCollectionIsPrivate)
+    const collectionId = String(editingCollection.id || editingCollection.collectionId)
+    const activeUser = getActiveCollectionUserId()
+
+    if (!title) {
+      setEditCollectionError('Titlul colecției este obligatoriu.')
+      return
     }
 
-    const previousTitle = collection.title
+    if (!activeUser) {
+      setEditCollectionError('Trebuie să fii conectat.')
+      return
+    }
 
-    // Optimistic update
-    const updateTitleInList = (list) =>
+    setEditCollectionError('')
+    setIsSavingEditCollection(true)
+
+    const previousCollection = editingCollection
+    const updatedCollection = {
+      ...editingCollection,
+      title,
+      description,
+      isPrivate,
+    }
+
+    const updateCollectionInList = (list) =>
       list.map((c) =>
-        String(c.id) === collectionId ? { ...c, title: cleanTitle } : c,
+        String(c.id || c.collectionId) === collectionId
+          ? { ...c, title, description, isPrivate }
+          : c,
       )
 
-    setUserCollections(updateTitleInList)
-    setExploreCollections(updateTitleInList)
+    setUserCollections(updateCollectionInList)
+    setUserCollectionSummaries((prev) =>
+      prev.map((c) =>
+        String(c.id) === collectionId ? { ...c, title } : c,
+      ),
+    )
+    if (isPrivate) {
+      setExploreCollections((prev) =>
+        prev.filter((c) => String(c.id || c.collectionId) !== collectionId),
+      )
+    } else {
+      setExploreCollections((prev) => {
+        const exists = prev.some((c) => String(c.id || c.collectionId) === collectionId)
+        if (exists) {
+          return prev.map((c) =>
+            String(c.id || c.collectionId) === collectionId
+              ? { ...c, title, description, isPrivate: false }
+              : c,
+          )
+        }
+        return [{ ...updatedCollection, isPrivate: false }, ...prev]
+      })
+    }
     setActiveModalCollection((prev) =>
-      prev && String(prev.id) === collectionId ? { ...prev, title: cleanTitle } : prev,
+      prev && String(prev.id || prev.collectionId) === collectionId
+        ? { ...prev, title, description, isPrivate }
+        : prev,
     )
 
     try {
@@ -2095,41 +2442,58 @@ function App() {
         body: JSON.stringify({
           userId: activeUser,
           collectionId,
-          title: cleanTitle,
+          title,
+          description,
+          isPrivate,
         }),
       })
 
       if (!response.ok) {
-        throw new Error(`Failed to update collection title: status ${response.status}`)
+        let errMessage = `Eroare la salvarea colecției (status ${response.status})`
+        try {
+          const errData = await response.json()
+          if (errData?.error) errMessage = errData.error
+        } catch {
+          // ignore
+        }
+        throw new Error(errMessage)
       }
 
       const data = await response.json()
-      if (data?.collection?.title) {
-        const confirmedTitle = data.collection.title
-        const confirmTitleInList = (list) =>
-          list.map((c) =>
-            String(c.id) === collectionId ? { ...c, title: confirmedTitle } : c,
-          )
-        setUserCollections(confirmTitleInList)
-        setExploreCollections(confirmTitleInList)
-        setActiveModalCollection((prev) =>
-          prev && String(prev.id) === collectionId ? { ...prev, title: confirmedTitle } : prev,
+      if (data?.collection) {
+        setUserCollections((prev) =>
+          prev.map((c) =>
+            String(c.id || c.collectionId) === collectionId
+              ? { ...c, ...data.collection, books: c.books || [] }
+              : c,
+          ),
         )
       }
-      return true
+
+      handleCloseEditCollection()
+      setCollectionsRefreshTrigger((prev) => prev + 1)
     } catch (err) {
-      console.error('Error updating collection title:', err)
-      // Revert optimistic update
-      const revertTitleInList = (list) =>
-        list.map((c) =>
-          String(c.id) === collectionId ? { ...c, title: previousTitle } : c,
-        )
-      setUserCollections(revertTitleInList)
-      setExploreCollections(revertTitleInList)
-      setActiveModalCollection((prev) =>
-        prev && String(prev.id) === collectionId ? { ...prev, title: previousTitle } : prev,
+      console.error('Error updating collection:', err)
+      setEditCollectionError(err?.message || 'Nu am putut actualiza colecția.')
+      setUserCollections((prev) =>
+        prev.map((c) =>
+          String(c.id || c.collectionId) === collectionId ? previousCollection : c,
+        ),
       )
-      return false
+      setUserCollectionSummaries((prev) =>
+        prev.map((c) =>
+          String(c.id) === collectionId
+            ? { ...c, title: previousCollection.title }
+            : c,
+        ),
+      )
+      setActiveModalCollection((prev) =>
+        prev && String(prev.id || prev.collectionId) === collectionId
+          ? previousCollection
+          : prev,
+      )
+    } finally {
+      setIsSavingEditCollection(false)
     }
   }
 
@@ -2140,7 +2504,7 @@ function App() {
   }
 
   const handleAddBookToCollectionFromSearch = async (book) => {
-    const activeUser = cookieUserId || getUserIdFromCookie()
+    const activeUser = getActiveCollectionUserId()
     if (!targetCollectionForSearch?.id || !activeUser || !book || isAddingBookToCollection) return
 
     const bookId = String(book.bookId || book.id || '')
@@ -2173,13 +2537,15 @@ function App() {
       })
 
       if (!response.ok) {
-        throw new Error(`Failed to add book to collection: status ${response.status}`)
+        const errData = await response.json().catch(() => ({}))
+        throw new Error(errData.error || `Failed to add book to collection: status ${response.status}`)
       }
 
       const normalizedAddedBook = normalizeCsvBook(book, 0)
+      const targetId = String(targetCollectionForSearch.id)
       const updateCollectionBooks = (list) =>
         list.map((c) => {
-          if (Number(c.id) !== Number(targetCollectionForSearch.id)) return c
+          if (String(c.id) !== targetId && Number(c.id) !== Number(targetId)) return c
           const existingBooks = Array.isArray(c.books) ? c.books : []
           if (existingBooks.some((b) => String(b.bookId || b.id) === bookId)) return c
           return {
@@ -2194,14 +2560,14 @@ function App() {
       setTargetCollectionForSearch(null)
     } catch (err) {
       console.error('Error adding book to collection:', err)
-      setSearchError('Nu am putut adăuga cartea în colecție.')
+      setSearchError(err?.message || 'Nu am putut adăuga cartea în colecție.')
     } finally {
       setIsAddingBookToCollection(false)
     }
   }
 
   const handleRemoveBookFromActiveCollection = async () => {
-    const activeUser = cookieUserId || getUserIdFromCookie()
+    const activeUser = getActiveCollectionUserId()
     if (!activeModalCollection?.id || !selectedBook || !activeUser) return
     const bookId = String(selectedBook.bookId || selectedBook.id || '')
     if (!bookId) return
@@ -2256,7 +2622,6 @@ function App() {
     setSelectedBook(null)
     setActiveModalCollection(null)
     window.history.pushState({}, '', `/${creatorUserId}/collections`)
-    setBooksFetchTrigger((prev) => prev + 1)
   }
 
   const handleSelectSearchBook = (book) => {
@@ -2275,7 +2640,7 @@ function App() {
     setSelectedBook(null)
     setActiveAuthorFilter('all')
 
-    const ownId = cookieUserId || getUserIdFromCookie() || ''
+    const ownId = isUserLoggedIn ? (cookieUserId || getUserIdFromCookie() || '') : ''
     setCurrentUserId(ownId)
     if (!ownId) {
       setUsername('')
@@ -2389,11 +2754,11 @@ function App() {
               (selectedBook.id && String(b.id) === String(selectedBook.id))
             return isMatch
               ? {
-                  ...b,
-                  bookshelves: savedShelfName,
-                  readAt: todayFormatted,
-                  'Date Read': todayFormatted,
-                }
+                ...b,
+                bookshelves: savedShelfName,
+                readAt: todayFormatted,
+                'Date Read': todayFormatted,
+              }
               : b
           })
         }
@@ -2633,15 +2998,15 @@ function App() {
       )
       setSelectedBook((prev) =>
         prev &&
-        (String(prev.bookId || '') === bookId ||
-          String(prev.id || '') === bookId ||
-          (selectedBook.id && String(prev.id) === String(selectedBook.id)))
+          (String(prev.bookId || '') === bookId ||
+            String(prev.id || '') === bookId ||
+            (selectedBook.id && String(prev.id) === String(selectedBook.id)))
           ? {
-              ...prev,
-              bookshelves: '',
-              readAt: '',
-              'Date Read': '',
-            }
+            ...prev,
+            bookshelves: '',
+            readAt: '',
+            'Date Read': '',
+          }
           : prev
       )
       if (cookieUserId) {
@@ -2658,6 +3023,127 @@ function App() {
     if (modalToastTimeoutRef.current) clearTimeout(modalToastTimeoutRef.current)
     setModalToast(msg)
     modalToastTimeoutRef.current = setTimeout(() => setModalToast(''), 2200)
+  }
+
+  const handleToggleBookInCollection = async (collectionSummary) => {
+    const activeUser = getActiveCollectionUserId()
+    if (!activeUser || !supabaseUser || !selectedBook || !collectionSummary?.id) return
+
+    const colId = String(collectionSummary.id)
+    const isCurrentlyIn = selectedBookCollectionIds.has(colId)
+    const bookId = String(selectedBook.bookId || selectedBook.id || '')
+    const cleanIsbn = String(selectedBook.isbn || selectedBook.isbn13 || '')
+      .replace(/[^0-9X]/gi, '')
+      .trim()
+
+    setCollectionActionInProgressId(colId)
+
+    // Optimistically update membership state
+    setSelectedBookCollectionIds((prev) => {
+      const next = new Set(prev)
+      if (isCurrentlyIn) {
+        next.delete(colId)
+      } else {
+        next.add(colId)
+      }
+      return next
+    })
+
+    try {
+      if (isCurrentlyIn) {
+        const response = await fetch('/api/collections', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: activeUser,
+            collectionId: colId,
+            bookId,
+            isbn: cleanIsbn,
+          }),
+        })
+
+        if (!response.ok) {
+          throw new Error(`Failed to remove book: status ${response.status}`)
+        }
+
+        const removeBookFn = (list) =>
+          list.map((c) => {
+            if (String(c.id) !== colId) return c
+            return {
+              ...c,
+              books: (c.books || []).filter(
+                (b) =>
+                  String(b.bookId || b.id) !== bookId &&
+                  (!cleanIsbn ||
+                    String(b.isbn || b.isbn13 || '').replace(/[^0-9X]/gi, '') !== cleanIsbn),
+              ),
+            }
+          })
+
+        setUserCollections(removeBookFn)
+        setExploreCollections(removeBookFn)
+        showModalToast(`Eliminat din „${collectionSummary.title}”`)
+      } else {
+        const response = await fetch('/api/collections', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'add-book',
+            userId: activeUser,
+            collectionId: colId,
+            bookId,
+            book: {
+              bookId,
+              title: selectedBook.title,
+              author: selectedBook.author,
+              isbn: selectedBook.isbn || selectedBook.isbn13,
+              pages: selectedBook.pages,
+              publishedYear: selectedBook.publishedYear,
+              publisher: selectedBook.publisher,
+              binding: selectedBook.binding,
+              description: selectedBook.description,
+              mainCategory: selectedBook.mainCategory,
+              coverUrl: selectedBook.imageUrl || selectedBook.coverUrl,
+            },
+          }),
+        })
+
+        if (!response.ok) {
+          throw new Error(`Failed to add book: status ${response.status}`)
+        }
+
+        const normalizedAddedBook = normalizeCsvBook(selectedBook, 0)
+        const addBookFn = (list) =>
+          list.map((c) => {
+            if (String(c.id) !== colId) return c
+            const existingBooks = Array.isArray(c.books) ? c.books : []
+            if (existingBooks.some((b) => String(b.bookId || b.id) === bookId)) return c
+            return {
+              ...c,
+              books: [...existingBooks, normalizedAddedBook],
+            }
+          })
+
+        setUserCollections(addBookFn)
+        setExploreCollections(addBookFn)
+        showModalToast(`Adăugat în „${collectionSummary.title}”`)
+      }
+    } catch (err) {
+      console.error('Error toggling book in collection:', err)
+      // Rollback optimistic update
+      setSelectedBookCollectionIds((prev) => {
+        const next = new Set(prev)
+        if (isCurrentlyIn) {
+          next.add(colId)
+        } else {
+          next.delete(colId)
+        }
+        return next
+      })
+      showModalToast('Eroare la actualizarea colecției.')
+    } finally {
+      setCollectionActionInProgressId(null)
+    }
   }
 
   const handleJumpBook = (delta = 1, { saveToRead = false } = {}) => {
@@ -2897,12 +3383,20 @@ function App() {
   }
 
   useEffect(() => {
-    if (!selectedBook && !isSearchModalOpen && !showNewCollectionInput && !showBookQrModal) return undefined
+    if (!selectedBook && !isSearchModalOpen && !showNewCollectionInput && !editingCollection && !showBookQrModal && !showProfileModal) return undefined
 
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
         if (showBookQrModal) {
           setShowBookQrModal(false)
+          return
+        }
+        if (showProfileModal) {
+          setShowProfileModal(false)
+          return
+        }
+        if (editingCollection) {
+          handleCloseEditCollection()
           return
         }
         if (selectedBook) {
@@ -2915,6 +3409,7 @@ function App() {
           setNewCollectionTitle('')
           setNewCollectionDescription('')
           setNewCollectionIsPrivate(false)
+          setNewCollectionError('')
         }
         return
       }
@@ -2932,7 +3427,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedBook, isSearchModalOpen, showNewCollectionInput, isSwipableModal, modalBookList, modalSwipeExit, cookieUserId, currentUserId, supabaseUser, openedFromSearch, activeModalCollection])
+  }, [selectedBook, isSearchModalOpen, showNewCollectionInput, editingCollection, showBookQrModal, showProfileModal, isSwipableModal, modalBookList, modalSwipeExit, cookieUserId, currentUserId, supabaseUser, openedFromSearch, activeModalCollection])
 
   const modalRotation = useMemo(() => {
     if (modalSwipeExit === 'right') return 16
@@ -3387,8 +3882,8 @@ function App() {
     ''
 
   return (
-    <div style={{ position: 'relative', minHeight: '100vh', width: '100%', overflowX: 'hidden' }}>
-      <main className="app-shell" style={{ position: 'relative', zIndex: 1 }}>
+    <div style={{ position: 'relative', minHeight: '100vh', width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+      <main className="app-shell" style={{ position: 'relative', zIndex: 1, maxWidth: '100%' }}>
         <header className="library-header">
           <div
             className="library-header-row"
@@ -3418,19 +3913,19 @@ function App() {
             )}
           </div>
 
-          {!isExploreMode && yearlySummary.count > 5 && yearlySummary.totalPages > 0 ? (
+          {loggedInUserName && yearlySummary.count > 5 && yearlySummary.totalPages > 0 ? (
             <div className="reading-summary book-detail-label" aria-live="polite">
               <span>{yearlySummary.count} cărți citite în 2026</span>
-              <span>// {yearlySummary.totalPages.toLocaleString()} pagini</span>
+              <span>· {yearlySummary.totalPages.toLocaleString()} pagini</span>
             </div>
           ) : null}
 
           <div className="shelf-pills" aria-label="Book shelves">
             <RubberSegment
-              key={`top-nav-${isUserLoggedIn}-${isVisitingOtherUser}`}
+              key="top-nav-segment"
               pad={14}
               items={visibleTopNavOptions.map((item) => {
-                const isLocked = isExploreMode && !isUserLoggedIn && (item.id === 'shelves' || item.id === 'collections')
+                const isLocked = !isVisitingOtherUser && !isUserLoggedIn && (item.id === 'shelves' || item.id === 'collections')
                 return {
                   value: item.id,
                   label: isLocked ? (
@@ -3454,7 +3949,7 @@ function App() {
 
                 if (item.id === 'explore') {
                   setIsExploreMode(true)
-                  const ownId = cookieUserId || getUserIdFromCookie() || ''
+                  const ownId = isUserLoggedIn ? (cookieUserId || getUserIdFromCookie() || '') : ''
                   setCurrentUserId(ownId)
                   if (!ownId) {
                     setUsername('')
@@ -3463,13 +3958,22 @@ function App() {
                   return
                 }
 
+                if (!isVisitingOtherUser && !isUserLoggedIn) {
+                  setTimeout(() => {
+                    setShowProfileModal(true)
+                  }, 0)
+                  return
+                }
+
                 // If currently in explore feed, switch to own library if available; otherwise require login
-                const targetUser = isExploreMode
-                  ? cookieUserId || getUserIdFromCookie() || currentUserId
-                  : currentUserId || cookieUserId || getUserIdFromCookie()
+                const targetUser = isVisitingOtherUser
+                  ? currentUserId
+                  : (getActiveCollectionUserId() || cookieUserId || getUserIdFromCookie() || currentUserId)
 
                 if (!targetUser) {
-                  setShowProfileModal(true)
+                  setTimeout(() => {
+                    setShowProfileModal(true)
+                  }, 0)
                   return
                 }
 
@@ -3488,6 +3992,15 @@ function App() {
                   activeShelf === 'collections' ? lastBookShelfRef.current || 'read' : activeShelf
                 setActiveShelf(targetShelf)
                 window.history.pushState({}, '', `/${targetUser}/${targetShelf}`)
+
+                setIsShelfReady(false)
+                if (!booksByUserIdCacheRef.current.has(String(targetUser))) {
+                  setIsLoading(true)
+                } else {
+                  setTimeout(() => {
+                    setIsShelfReady(true)
+                  }, 80)
+                }
               }}
               trackColor="rgba(38, 35, 46, 0.76)"
               thumbColor="#8b5cf6"
@@ -3496,10 +4009,10 @@ function App() {
               size="lg"
               radius={12}
               inset={3}
-              stretch={100}
-              squash={3}
-              speed={1}
-              glide={75}
+              stretch={30}
+              squash={1}
+              speed={1.6}
+              glide={30}
               draggable
             />
             {currentUserId && !isExploreMode && activeShelf !== 'collections' ? (
@@ -3521,7 +4034,7 @@ function App() {
                   setSelectedBook(null)
                 }}
                 chipColor="rgba(38, 35, 46, 0.76)"
-                activeColor="#8b5cf6"
+                activeColor="rgba(255, 255, 255, 0.14)"
                 textColor="#f4f4f5"
                 activeTextColor="#ffffff"
                 size="sm"
@@ -3545,7 +4058,7 @@ function App() {
                 value={!isOwnProfile && activeCollectionFilter === 'private' ? 'all' : activeCollectionFilter}
                 onChange={(value) => setActiveCollectionFilter(value)}
                 chipColor="rgba(38, 35, 46, 0.76)"
-                activeColor="#8b5cf6"
+                activeColor="rgba(255, 255, 255, 0.14)"
                 textColor="#f4f4f5"
                 activeTextColor="#ffffff"
                 size="sm"
@@ -3803,6 +4316,40 @@ function App() {
                                 </button>
                               </>
                             )}
+                            {userCollectionSummaries.length > 0 && (
+                              <>
+                                <div className="book-shelf-menu-divider" />
+                                <div className="book-shelf-menu-section-title">Colecții</div>
+                                {userCollectionSummaries.map((col) => {
+                                  const colId = String(col.id)
+                                  const inCol = selectedBookCollectionIds.has(colId)
+                                  const isBusy = collectionActionInProgressId === colId
+                                  return (
+                                    <button
+                                      key={col.id}
+                                      type="button"
+                                      className={`book-shelf-option-item book-shelf-option-collection ${inCol ? 'active' : ''}`}
+                                      disabled={isBusy}
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        handleToggleBookInCollection(col)
+                                      }}
+                                      title={inCol ? `Elimină din colecția „${col.title}”` : `Adaugă în colecția „${col.title}”`}
+                                    >
+                                      <span className="book-shelf-option-col-label">
+                                        <Library size={13} className="book-shelf-option-col-icon" />
+                                        <span className="book-shelf-option-col-name">{col.title}</span>
+                                      </span>
+                                      {inCol ? (
+                                        <Check size={14} className="book-shelf-option-check" />
+                                      ) : isBusy ? (
+                                        <Loader2 size={13} className="spin" />
+                                      ) : null}
+                                    </button>
+                                  )
+                                })}
+                              </>
+                            )}
                           </div>
                         )}
                       </div>
@@ -3833,7 +4380,7 @@ function App() {
                   <div className="book-detail-rating-inline">
                     <span className="book-detail-rating-text">
                       {currentBookRating > 0
-                        ? `Evaluarea ta: ${currentBookRating}/5`
+                        ? `Evaluat la: ${currentBookRating}/5`
                         : 'Evaluarea ta:'}
                     </span>
                     <div className="book-detail-rating-stars">
@@ -3889,7 +4436,18 @@ function App() {
 
         {
           showProfileModal ? (
-            <div className="profile-modal-backdrop" onClick={() => setShowProfileModal(false)}>
+            <div
+              className="profile-modal-backdrop"
+              onPointerDown={(event) => {
+                profileModalBackdropPointerDownRef.current = event.target === event.currentTarget
+              }}
+              onClick={(event) => {
+                if (profileModalBackdropPointerDownRef.current && event.target === event.currentTarget) {
+                  setShowProfileModal(false)
+                }
+                profileModalBackdropPointerDownRef.current = false
+              }}
+            >
               <div className="profile-modal" onClick={(event) => event.stopPropagation()}>
                 <div className="profile-modal-header">
                   {supabaseUser ? (
@@ -4157,7 +4715,10 @@ function App() {
                   <button
                     type="button"
                     className="collections-new-trigger-btn"
-                    onClick={() => setShowNewCollectionInput(true)}
+                    onClick={() => {
+                      setNewCollectionError('')
+                      setShowNewCollectionInput(true)
+                    }}
                   >
                     <Plus size={16} />
                     <span>Creează prima ta colecție</span>
@@ -4168,7 +4729,7 @@ function App() {
               <div className="collections-rows-list">
                 {
                   (isExploreMode ? exploreCollections : filteredUserCollections).map((collection) => {
-                    const activeUser = cookieUserId || getUserIdFromCookie()
+                    const activeUser = getActiveCollectionUserId()
                     const isCollectionOwner = Boolean(
                       isUserLoggedIn && activeUser && String(collection.userId) === String(activeUser),
                     )
@@ -4176,15 +4737,14 @@ function App() {
                       <CollectionRow
                         key={collection.id}
                         collection={collection}
-                        isOwner={isCollectionOwner}
+                        isOwner={isExploreMode ? false : isCollectionOwner}
+                        isExplore={isExploreMode}
                         showCreator={isExploreMode}
                         onSelectCreator={handleSelectExploreCreator}
                         onAddBookClick={handleOpenAddBookForCollection}
                         onDeleteCollection={handleDeleteCollection}
-                        onTogglePrivacy={handleToggleCollectionPrivacy}
-                        isTogglingPrivacy={togglingPrivacyCollectionId === String(collection.id)}
                         onBookClick={handleOpenCollectionBook}
-                        onUpdateTitle={handleUpdateCollectionTitle}
+                        onEditCollection={handleOpenEditCollection}
                       />
                     )
                   })
@@ -4194,7 +4754,7 @@ function App() {
           </section>
         ) : (
           <>
-            {isLoading ? (
+            {isLoading || !isShelfReady ? (
               <div className="book-controls book-controls-placeholder" aria-hidden="true" />
             ) : totalShelfBooks.length > 0 || bookSearchQuery.trim() ? (
               <div
@@ -4258,7 +4818,7 @@ function App() {
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerUp}
             >
-              {shouldShowCarouselNavigation ? (
+              {shouldShowCarouselNavigation && isShelfReady && !isLoading ? (
                 <button
                   type="button"
                   className="nav-button"
@@ -4269,7 +4829,7 @@ function App() {
                 </button>
               ) : null}
 
-              {isLoading ? (
+              {isLoading || !isShelfReady ? (
                 <div className="books-carousel loading-carousel" aria-live="polite" aria-label="Loading books">
                   {Array.from({ length: 5 }).map((_, index) => (
                     <div key={`loading-${index}`} className="book-card loading-card">
@@ -4296,7 +4856,7 @@ function App() {
                 </div>
               ) : (
                 <div className="books-carousel" ref={carouselRef}>
-                  {visibleBooks.map((book, index) => {
+                  {visibleBooks.slice(0, bookRenderLimit).map((book, index) => {
 
                     return (
                       <article key={book.id} className="book-card">
@@ -4388,18 +4948,18 @@ function App() {
           )
         )}
 
-        {!isCheckingAuth && supabaseUser && (
+        {!isCheckingAuth && isUserLoggedIn && !isExploreMode && (
           <button
             type="button"
             className="sticky-add-book-btn"
             onClick={() => {
-              if (!isExploreMode && activeShelf === 'collections') {
-                const activeUser = cookieUserId || getUserIdFromCookie()
+              if (activeShelf === 'collections') {
+                const activeUser = getActiveCollectionUserId()
                 if (activeUser && String(currentUserId) !== String(activeUser)) {
                   setCurrentUserId(String(activeUser))
                   window.history.pushState({}, '', `/${activeUser}/collections`)
-                  setBooksFetchTrigger((prev) => prev + 1)
                 }
+                setNewCollectionError('')
                 setShowNewCollectionInput(true)
                 window.scrollTo({ top: 0, behavior: 'smooth' })
                 return
@@ -4411,12 +4971,12 @@ function App() {
               setSearchError('')
             }}
             aria-label={
-              !isExploreMode && activeShelf === 'collections'
+              activeShelf === 'collections'
                 ? 'Creează o colecție nouă'
                 : `Adaugă o carte în ${getShelfLabel(activeShelf)}`
             }
             title={
-              !isExploreMode && activeShelf === 'collections'
+              activeShelf === 'collections'
                 ? 'Creează o colecție nouă'
                 : `Adaugă o carte în ${getShelfLabel(activeShelf)}`
             }
@@ -4434,6 +4994,7 @@ function App() {
                 setNewCollectionTitle('')
                 setNewCollectionDescription('')
                 setNewCollectionIsPrivate(false)
+                setNewCollectionError('')
               }
             }}
             onClick={(e) => {
@@ -4442,6 +5003,7 @@ function App() {
                 setNewCollectionTitle('')
                 setNewCollectionDescription('')
                 setNewCollectionIsPrivate(false)
+                setNewCollectionError('')
               }
             }}
           >
@@ -4464,6 +5026,7 @@ function App() {
                     setNewCollectionTitle('')
                     setNewCollectionDescription('')
                     setNewCollectionIsPrivate(false)
+                    setNewCollectionError('')
                   }}
                   aria-label="Închide"
                   title="Închide"
@@ -4473,6 +5036,12 @@ function App() {
               </div>
 
               <form className="collections-new-form" onSubmit={handleCreateCollection}>
+                {newCollectionError && (
+                  <div className="collections-modal-error" role="alert">
+                    {newCollectionError}
+                  </div>
+                )}
+
                 <div className="collections-new-fields">
                   <label className="collections-modal-label">
                     <span>Titlu colecție</span>
@@ -4481,7 +5050,10 @@ function App() {
                       className="search-input collections-modal-input"
                       placeholder="Ex: Top SF, Cărți de vacanță..."
                       value={newCollectionTitle}
-                      onChange={(e) => setNewCollectionTitle(e.target.value)}
+                      onChange={(e) => {
+                        setNewCollectionTitle(e.target.value)
+                        if (newCollectionError) setNewCollectionError('')
+                      }}
                       autoFocus
                       maxLength={80}
                     />
@@ -4498,7 +5070,10 @@ function App() {
                       className="search-input collections-modal-textarea"
                       placeholder="O scurtă descriere a colecției (max 140 caractere)..."
                       value={newCollectionDescription}
-                      onChange={(e) => setNewCollectionDescription(e.target.value.slice(0, 140))}
+                      onChange={(e) => {
+                        setNewCollectionDescription(e.target.value.slice(0, 140))
+                        if (newCollectionError) setNewCollectionError('')
+                      }}
                       maxLength={140}
                       rows={3}
                     />
@@ -4525,6 +5100,7 @@ function App() {
                         setNewCollectionTitle('')
                         setNewCollectionDescription('')
                         setNewCollectionIsPrivate(false)
+                        setNewCollectionError('')
                       }}
                     >
                       Anulează
@@ -4541,6 +5117,127 @@ function App() {
                         </>
                       ) : (
                         'Creează colecția'
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {editingCollection && (
+          <div
+            className="profile-modal-backdrop"
+            onPointerDown={(e) => {
+              if (e.target === e.currentTarget) {
+                handleCloseEditCollection()
+              }
+            }}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                handleCloseEditCollection()
+              }
+            }}
+          >
+            <div
+              className="profile-modal collection-modal"
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="edit-collection-modal-title"
+            >
+              <div className="search-modal-header">
+                <h2 id="edit-collection-modal-title" className="search-modal-title">
+                  Editează colecția
+                </h2>
+                <button
+                  type="button"
+                  className="modal-close-btn"
+                  onClick={handleCloseEditCollection}
+                  aria-label="Închide"
+                  title="Închide"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form className="collections-new-form" onSubmit={handleSaveEditCollection}>
+                {editCollectionError && (
+                  <div className="collections-modal-error" role="alert">
+                    {editCollectionError}
+                  </div>
+                )}
+
+                <div className="collections-new-fields">
+                  <label className="collections-modal-label">
+                    <span>Titlu colecție</span>
+                    <input
+                      type="text"
+                      className="search-input collections-modal-input"
+                      placeholder="Ex: Top SF, Cărți de vacanță..."
+                      value={editCollectionTitle}
+                      onChange={(e) => {
+                        setEditCollectionTitle(e.target.value)
+                        if (editCollectionError) setEditCollectionError('')
+                      }}
+                      autoFocus
+                      maxLength={80}
+                    />
+                  </label>
+
+                  <label className="collections-modal-label">
+                    <div className="collections-modal-label-row">
+                      <span>Descriere scurtă (opțional)</span>
+                      <span className="collections-new-desc-counter">
+                        {editCollectionDescription.length}/140
+                      </span>
+                    </div>
+                    <textarea
+                      className="search-input collections-modal-textarea"
+                      placeholder="O scurtă descriere a colecției (max 140 caractere)..."
+                      value={editCollectionDescription}
+                      onChange={(e) => {
+                        setEditCollectionDescription(e.target.value.slice(0, 140))
+                        if (editCollectionError) setEditCollectionError('')
+                      }}
+                      maxLength={140}
+                      rows={3}
+                    />
+                  </label>
+                </div>
+
+                <div className="collections-new-footer">
+                  <label className="collections-new-private-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={editCollectionIsPrivate}
+                      onChange={(e) => setEditCollectionIsPrivate(e.target.checked)}
+                    />
+                    <Lock size={15} />
+                    <span>Colecție privată (vizibilă doar pentru tine)</span>
+                  </label>
+
+                  <div className="collections-new-actions">
+                    <button
+                      type="button"
+                      className="collections-new-cancel-btn"
+                      onClick={handleCloseEditCollection}
+                    >
+                      Anulează
+                    </button>
+                    <button
+                      type="submit"
+                      className="search-submit-btn"
+                      disabled={isSavingEditCollection || !editCollectionTitle.trim()}
+                    >
+                      {isSavingEditCollection ? (
+                        <>
+                          <Loader2 size={16} className="spin-icon" />
+                          <span>Se salvează...</span>
+                        </>
+                      ) : (
+                        'Save'
                       )}
                     </button>
                   </div>
@@ -4677,10 +5374,9 @@ function App() {
               ) : null}
             </div>
           </div>
-        )
-        }
-      </main >
-    </div >
+        )}
+      </main>
+    </div>
   )
 }
 
