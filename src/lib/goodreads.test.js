@@ -47,6 +47,11 @@ import collectionsHandler, {
   getUserCollectionSummaries,
   getBookCollectionIds,
 } from '../../api/collections.js'
+import feedHandler, {
+  recordFeedEvent,
+  getFeedEvents,
+  ensureFeedEventsTable,
+} from '../../api/feed.js'
 
 const createMockRes = () => {
   const res = {
@@ -1268,7 +1273,7 @@ test('saveBookToShelf saves canonical book and upserts user_shelves', async () =
   assert.equal(result.bookId, 'book999')
   assert.equal(result.shelf, 'to-read')
 
-  assert.equal(executedQueries.length, 2)
+  assert.equal(executedQueries.length, 3)
   assert.match(executedQueries[0].sql, /INSERT INTO books/)
   assert.deepEqual(executedQueries[0].values, [
     'book999',
@@ -1285,6 +1290,7 @@ test('saveBookToShelf saves canonical book and upserts user_shelves', async () =
 
   assert.match(executedQueries[1].sql, /INSERT INTO user_shelves/)
   assert.deepEqual(executedQueries[1].values, ['user1234', 'book999', 'to-read'])
+  assert.match(executedQueries[2].sql, /INSERT INTO feed_events/)
 })
 
 test('saveBookToShelf sets date_read to CURRENT_DATE when shelf is read', async () => {
@@ -1528,9 +1534,10 @@ test('rateBook updates rating in user_shelves or inserts read shelf entry', asyn
   assert.equal(result.bookId, 'book456')
   assert.equal(result.shelf, 'read')
   assert.equal(result.myRating, 5)
-  assert.equal(executed.length, 2)
+  assert.equal(executed.length, 3)
   assert.match(executed[1].sql, /UPDATE user_shelves/)
   assert.deepEqual(executed[1].values, ['user1234', 'book456', 5])
+  assert.match(executed[2].sql, /INSERT INTO feed_events/)
 })
 
 test('getUserShelves returns all user books alongside their reviews at page load', async () => {
@@ -3254,6 +3261,161 @@ test('matchesBookSearch performs client-side search across title, author, isbn, 
   assert.equal(matchesBookSearch(book, 'harry potter'), false)
   assert.equal(matchesBookSearch(null, 'padurea'), false)
 })
+
+test('recordFeedEvent records events to database', async () => {
+  const captured = []
+  const mockDbQuery = async (sql, values) => {
+    captured.push({ sql, values })
+    return [{ id: 1, user_id: values[0], event_type: values[1], created_at: new Date().toISOString() }]
+  }
+
+  const result = await recordFeedEvent({
+    userId: 'user1234',
+    eventType: 'shelf_add',
+    bookId: 'book999',
+    metadata: { shelf: 'to-read' },
+    queryFn: mockDbQuery,
+  })
+
+  assert.equal(result.id, 1)
+  assert.equal(result.user_id, 'user1234')
+  assert.equal(result.event_type, 'shelf_add')
+  assert.equal(captured.length, 1)
+  assert.match(captured[0].sql, /INSERT INTO feed_events/)
+  assert.equal(captured[0].values[0], 'user1234')
+  assert.equal(captured[0].values[1], 'shelf_add')
+  assert.equal(captured[0].values[2], 'book999')
+})
+
+test('getFeedEvents returns formatted events with limit 20 and filters private collections', async () => {
+  const captured = []
+  const mockRows = [
+    {
+      id: '10',
+      user_id: 'user1234',
+      username: 'Alex Reader',
+      event_type: 'shelf_add',
+      book_id: 'b1',
+      book_title: 'Dune',
+      book_author: 'Frank Herbert',
+      book_isbn: '9780441172719',
+      cover_url: 'https://example.com/dune.jpg',
+      collection_id: null,
+      collection_title: null,
+      collection_description: null,
+      collection_is_private: null,
+      metadata: { shelf: 'read', rating: 5 },
+      created_at: '2026-11-24T19:00:00Z',
+    },
+    {
+      id: '9',
+      user_id: 'user5678',
+      username: 'Elena',
+      event_type: 'collection_created',
+      book_id: null,
+      book_title: null,
+      book_author: null,
+      book_isbn: null,
+      cover_url: '',
+      collection_id: '42',
+      collection_title: 'Sci-Fi Classics',
+      collection_description: 'Best of space opera',
+      collection_is_private: false,
+      metadata: { title: 'Sci-Fi Classics' },
+      created_at: '2026-11-24T18:30:00Z',
+    },
+    {
+      id: '8',
+      user_id: 'user1234',
+      username: 'Alex Reader',
+      event_type: 'csv_upload',
+      book_id: null,
+      book_title: null,
+      book_author: null,
+      book_isbn: null,
+      cover_url: '',
+      collection_id: null,
+      collection_title: null,
+      collection_description: null,
+      collection_is_private: null,
+      metadata: { bookCount: 142 },
+      created_at: '2026-11-24T18:00:00Z',
+    },
+  ]
+
+  const mockDbQuery = async (sql, values) => {
+    captured.push({ sql, values })
+    return mockRows
+  }
+
+  const result = await getFeedEvents({ limit: 20, queryFn: mockDbQuery })
+
+  assert.equal(result.count, 3)
+  assert.equal(result.events.length, 3)
+  assert.match(captured[0].sql, /FROM feed_events/)
+  assert.match(captured[0].sql, /col\.is_private IS NULL OR col\.is_private = FALSE/)
+  assert.equal(captured[0].values[0], 20) // default limit 20
+
+  // Event 1: shelf_add with book
+  const ev1 = result.events[0]
+  assert.equal(ev1.id, '10')
+  assert.equal(ev1.eventType, 'shelf_add')
+  assert.equal(ev1.user.userId, 'user1234')
+  assert.equal(ev1.user.displayName, 'Alex Reader')
+  assert.equal(ev1.book.bookId, 'b1')
+  assert.equal(ev1.book.title, 'Dune')
+  assert.equal(ev1.metadata.rating, 5)
+
+  // Event 2: collection_created
+  const ev2 = result.events[1]
+  assert.equal(ev2.eventType, 'collection_created')
+  assert.equal(ev2.collection.collectionId, '42')
+  assert.equal(ev2.collection.title, 'Sci-Fi Classics')
+
+  // Event 3: csv_upload
+  const ev3 = result.events[2]
+  assert.equal(ev3.eventType, 'csv_upload')
+  assert.equal(ev3.metadata.bookCount, 142)
+})
+
+test('feed endpoint handles GET requests, sets no-store, and rejects non-GET methods', async () => {
+  const reqGet = {
+    method: 'GET',
+    query: { limit: '20' },
+    dbQuery: async () => [
+      {
+        id: '1',
+        user_id: 'user1234',
+        username: 'Test User',
+        event_type: 'shelf_add',
+        book_id: 'b1',
+        book_title: 'Dune',
+        metadata: { shelf: 'to-read' },
+        created_at: '2026-11-24T19:00:00Z',
+      },
+    ],
+  }
+  const resGet = createMockRes()
+  await feedHandler(reqGet, resGet)
+
+  assert.equal(resGet.statusCode, 200)
+  assert.equal(resGet.headers['Cache-Control'], 'no-store')
+  assert.equal(resGet.payload.count, 1)
+  assert.equal(resGet.payload.events[0].book.title, 'Dune')
+
+  // OPTIONS returns 204
+  const reqOptions = { method: 'OPTIONS' }
+  const resOptions = createMockRes()
+  await feedHandler(reqOptions, resOptions)
+  assert.equal(resOptions.statusCode, 204)
+
+  // POST returns 405 Method Not Allowed
+  const reqPost = { method: 'POST' }
+  const resPost = createMockRes()
+  await feedHandler(reqPost, resPost)
+  assert.equal(resPost.statusCode, 405)
+})
+
 
 
 

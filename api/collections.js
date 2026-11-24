@@ -1,5 +1,6 @@
 import { createDefaultDbQuery } from './_lib/db.js'
 import { normalizeCsvBook } from '../src/lib/goodreads.js'
+import { recordFeedEvent } from './feed.js'
 
 const mapCollectionRowToBook = (row, index) =>
   normalizeCsvBook(
@@ -276,6 +277,21 @@ export const createCollection = async ({
     executeQuery(sql, [cleanUserId, cleanTitle, cleanDescription, privateFlag]),
   )
   const row = rows?.[0]
+
+  if (row?.collection_id) {
+    await recordFeedEvent({
+      userId: cleanUserId,
+      eventType: 'collection_created',
+      collectionId: row.collection_id,
+      metadata: {
+        title: cleanTitle,
+        description: cleanDescription || '',
+        isPrivate: Boolean(row.is_private ?? privateFlag),
+      },
+      queryFn: executeQuery,
+    })
+  }
+
   return {
     success: true,
     collection: {
@@ -415,6 +431,18 @@ export const addBookToCollection = async ({
         },
         0,
       )
+
+      await recordFeedEvent({
+        userId: cleanUserId,
+        eventType: 'collection_updated',
+        collectionId: cleanCollectionId,
+        bookId: cleanBookId,
+        metadata: {
+          action: 'book_added',
+          bookTitle: title,
+        },
+        queryFn: executeQuery,
+      })
 
       return {
         success: true,
@@ -578,6 +606,19 @@ export const addBookToCollection = async ({
       }
 
       const row = rows[0]
+
+      await recordFeedEvent({
+        userId: cleanUserId,
+        eventType: 'collection_updated',
+        collectionId: cleanCollectionId,
+        metadata: {
+          title: row.title,
+          isPrivate: Boolean(row.is_private),
+          ...(description !== undefined ? { description: String(description).slice(0, 140) } : {}),
+        },
+        queryFn: executeQuery,
+      })
+
       return {
         success: true,
         collectionId: String(row.collection_id),

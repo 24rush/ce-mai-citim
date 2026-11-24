@@ -393,17 +393,19 @@ export const updateBookMetadataInDb = async ({
 }
 
 export const updateBookIsbnInDb = async ({ userId: _userId, bookId, isbn, queryFn }) => {
-  if (!bookId || !isbn) return null
+  if (!bookId) return null
   const executeQuery = queryFn || (await createDefaultDbQuery())
   const sql = `
     UPDATE books
-    SET isbn = $1, google_books_queried = TRUE, updated_at = NOW()
+    SET
+      isbn = COALESCE(NULLIF(isbn, ''), $1),
+      google_books_queried = TRUE,
+      updated_at = NOW()
     WHERE book_id = $2
-      AND (isbn IS NULL OR isbn = '')
-    RETURNING book_id, title, author, isbn;
+    RETURNING book_id, title, author, isbn, google_books_queried;
   `.trim()
 
-  const rows = await executeQuery(sql, [isbn, bookId])
+  const rows = await executeQuery(sql, [isbn || null, bookId])
   return rows?.[0] || null
 }
 
@@ -632,9 +634,9 @@ export default async function handler(req, res) {
     const effectiveIsbn = inputIsbn || cleanIsbn(dbBook?.isbn) || ''
 
     // Server-side check:
-    // If google_books_queried is already true, or both description and mainCategory exist in DB:
-    // Google Books has already been queried (or no fields are missing) -> skip external search!
-    if (dbBook && (dbBook.google_books_queried || (dbBook.description && dbBook.main_category))) {
+    // If google_books_queried is already true, or book already has description in DB:
+    // Skip external search and return immediately!
+    if (dbBook && (dbBook.google_books_queried || dbBook.description)) {
       return res.status(200).json({
         success: true,
         isbn: dbBook.isbn || effectiveIsbn || null,
@@ -706,14 +708,15 @@ export default async function handler(req, res) {
             mainCategory: searchResult.mainCategory,
             pageCount: searchResult.pageCount,
             publishedYear: searchResult.publishedYear,
-            queryFn,
+            googleBooksQueried: true,
+            queryFn: executeQuery,
           })
         } else {
           updatedDbRecord = await updateBookIsbnInDb({
             userId,
             bookId,
             isbn: searchResult.isbn,
-            queryFn,
+            queryFn: executeQuery,
           })
         }
       } catch (dbErr) {
@@ -726,7 +729,7 @@ export default async function handler(req, res) {
         await upsertCoverInDb({
           isbn: searchResult.isbn,
           url: searchResult.coverUrl,
-          queryFn,
+          queryFn: executeQuery,
         })
       } catch (coverErr) {
         console.error('Failed to save cover in database:', coverErr)

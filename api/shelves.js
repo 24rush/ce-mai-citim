@@ -1,5 +1,6 @@
 import { createDefaultDbQuery } from './_lib/db.js'
 import { isAllowedShelf } from './uploadcsv.js'
+import { recordFeedEvent } from './feed.js'
 
 export const saveBookToShelf = async ({
   userId,
@@ -119,12 +120,26 @@ export const saveBookToShelf = async ({
   }
 
   const rows = await executeQuery(shelfSql, shelfParams)
+  const finalShelf = rows?.[0]?.bookshelves || cleanShelf
+  const finalRating = Number(rows?.[0]?.my_rating) || (rating !== undefined && rating !== null ? Number(rating) : 0)
+
+  await recordFeedEvent({
+    userId: cleanUserId,
+    eventType: 'shelf_add',
+    bookId: cleanBookId,
+    metadata: {
+      shelf: finalShelf,
+      ...(finalRating > 0 ? { rating: finalRating } : {}),
+    },
+    queryFn: executeQuery,
+  })
+
   return {
     success: true,
     userId: cleanUserId,
     bookId: cleanBookId,
-    shelf: rows?.[0]?.bookshelves || cleanShelf,
-    myRating: Number(rows?.[0]?.my_rating) || (rating !== undefined && rating !== null ? Number(rating) : 0),
+    shelf: finalShelf,
+    myRating: finalRating,
     dateRead: rows?.[0]?.date_read || (cleanShelf === 'read' ? new Date().toISOString().slice(0, 10).replace(/-/g, '/') : ''),
   }
 }
@@ -163,11 +178,24 @@ export const rateBook = async ({ userId, bookId, rating, queryFn }) => {
     `.trim()
 
     const rows = await executeQuery(updateSql, [cleanUserId, cleanBookId, cleanRating])
+    const finalShelf = rows?.[0]?.bookshelves || existing[0]?.bookshelves || 'read'
+
+    await recordFeedEvent({
+      userId: cleanUserId,
+      eventType: 'book_rated',
+      bookId: cleanBookId,
+      metadata: {
+        rating: cleanRating,
+        shelf: finalShelf,
+      },
+      queryFn: executeQuery,
+    })
+
     return {
       success: true,
       userId: cleanUserId,
       bookId: cleanBookId,
-      shelf: rows?.[0]?.bookshelves || existing[0]?.bookshelves || 'read',
+      shelf: finalShelf,
       myRating: Number(rows?.[0]?.my_rating) || cleanRating,
       dateRead: rows?.[0]?.date_read || '',
     }
@@ -188,11 +216,24 @@ export const rateBook = async ({ userId, bookId, rating, queryFn }) => {
   `.trim()
 
   const rows = await executeQuery(insertSql, [cleanUserId, cleanBookId, cleanRating])
+  const finalShelf = rows?.[0]?.bookshelves || 'read'
+
+  await recordFeedEvent({
+    userId: cleanUserId,
+    eventType: 'book_rated',
+    bookId: cleanBookId,
+    metadata: {
+      rating: cleanRating,
+      shelf: finalShelf,
+    },
+    queryFn: executeQuery,
+  })
+
   return {
     success: true,
     userId: cleanUserId,
     bookId: cleanBookId,
-    shelf: rows?.[0]?.bookshelves || 'read',
+    shelf: finalShelf,
     myRating: Number(rows?.[0]?.my_rating) || cleanRating,
     dateRead: rows?.[0]?.date_read || (rows?.[0]?.bookshelves === 'read' ? new Date().toISOString().slice(0, 10).replace(/-/g, '/') : ''),
   }

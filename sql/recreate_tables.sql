@@ -1,4 +1,5 @@
 -- Drop existing tables in reverse dependency order
+DROP TABLE IF EXISTS feed_events CASCADE;
 DROP TABLE IF EXISTS collection_books CASCADE;
 DROP TABLE IF EXISTS collections CASCADE;
 DROP TABLE IF EXISTS user_shelves CASCADE;
@@ -86,4 +87,19 @@ CREATE TABLE collection_books (
 );
 
 CREATE INDEX idx_collection_books_collection_id ON collection_books (collection_id);
+
+-- 7. Feed events table (activity stream)
+CREATE TABLE feed_events (
+  id BIGSERIAL PRIMARY KEY,
+  user_id VARCHAR(8) NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  event_type VARCHAR(32) NOT NULL,
+  book_id VARCHAR(64) REFERENCES books(book_id) ON DELETE CASCADE,
+  collection_id BIGINT REFERENCES collections(collection_id) ON DELETE CASCADE,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_feed_events_created_at ON feed_events (created_at DESC);
+CREATE INDEX idx_feed_events_user_id ON feed_events (user_id);
+
 

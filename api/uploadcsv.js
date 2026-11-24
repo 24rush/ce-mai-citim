@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import { createDefaultDbQuery } from './_lib/db.js'
 import { checkOpenLibraryCover, cleanIsbn, getGoogleBooksApiKey, searchGoogleBooks, upsertCoverInDb } from './isbn.js'
+import { recordFeedEvent } from './feed.js'
 import {
   USER_ID_COOKIE_NAME,
   cleanCsvValue,
@@ -1075,6 +1076,23 @@ export default async function handler(req, res) {
     await insertBooksIntoDatabase({
       userId,
       dbRows,
+      queryFn: executeQuery,
+    })
+
+    await recordFeedEvent({
+      userId,
+      eventType: 'csv_upload',
+      metadata: {
+        bookCount: dbRows.length,
+        username: displayName || '',
+        books: (books || []).slice(0, 12).map((b) => ({
+          bookId: String(b.bookId || b.id || ''),
+          title: b.title || '',
+          author: b.author || '',
+          isbn: b.isbn || '',
+          coverUrl: b.imageUrl || b.coverUrl || '',
+        })),
+      },
       queryFn: executeQuery,
     })
 

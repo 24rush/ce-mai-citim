@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
-import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FileText, Globe, Library, Loader2, Lock, LogOut, MoreVertical, Pencil, Plus, QrCode, Save, Search, Share2, Star, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
+import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FileText, Globe, Library, Loader2, Lock, LogOut, MoreVertical, Pencil, Plus, QrCode, Save, Search, Share2, Sparkles, Star, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
 import PeekRating from './components/PeekRating'
 import {
   buildBookShareUrl,
@@ -76,6 +76,130 @@ const getBookSortOptions = (shelfId) => {
   }
 
   return BOOK_SORT_OPTIONS
+}
+
+const formatEventTime = (timestamp) => {
+  if (!timestamp) return ''
+  const date = new Date(timestamp)
+  const diffSec = Math.floor((Date.now() - date.getTime()) / 1000)
+  if (isNaN(diffSec) || diffSec < 0) return ''
+  if (diffSec < 60) return 'chiar acum'
+  const diffMin = Math.floor(diffSec / 60)
+  if (diffMin < 60) return `acum ${diffMin} ${diffMin === 1 ? 'minut' : 'minute'}`
+  const diffHr = Math.floor(diffMin / 60)
+  if (diffHr < 24) return `acum ${diffHr} ${diffHr === 1 ? 'oră' : 'ore'}`
+  const diffDays = Math.floor(diffHr / 24)
+  if (diffDays < 30) return `acum ${diffDays} ${diffDays === 1 ? 'zi' : 'zile'}`
+  const diffMonths = Math.floor(diffDays / 30)
+  if (diffMonths < 12) return `acum ${diffMonths} ${diffMonths === 1 ? 'lună' : 'luni'}`
+  return date.toLocaleDateString('ro-RO', { day: 'numeric', month: 'short' })
+}
+
+const renderFeedStatement = (event, onVisitUser) => {
+  const { eventType, metadata, collection, user } = event || {}
+  const userName = user?.displayName || user?.userId || 'Cineva'
+  const userId = user?.userId
+
+  const targetShelf = collection ? 'collections' : metadata?.shelf || 'read'
+
+  const userBtn = (
+    <button
+      type="button"
+      className="feed-username-btn"
+      onClick={(e) => {
+        e.stopPropagation()
+        if (userId && onVisitUser) {
+          onVisitUser(userId, targetShelf)
+        }
+      }}
+      title={userId ? `Vezi profilul lui ${userName}` : undefined}
+    >
+      {userName}
+    </button>
+  )
+
+  if (eventType === 'shelf_add') {
+    const shelf = metadata?.shelf
+    if (shelf === 'read') {
+      return (
+        <div className="feed-statement">
+          {userBtn}
+          <span className="feed-statement-action">a adăugat la</span>
+          <span className="feed-statement-highlight">Citite</span>
+        </div>
+      )
+    }
+    if (shelf === 'currently-reading') {
+      return (
+        <div className="feed-statement">
+          {userBtn}
+          <span className="feed-statement-action">citește în prezent</span>
+        </div>
+      )
+    }
+    if (shelf === 'to-read') {
+      return (
+        <div className="feed-statement">
+          {userBtn}
+          <span className="feed-statement-action">vrea să citească</span>
+        </div>
+      )
+    }
+    return (
+      <div className="feed-statement">
+        {userBtn}
+        <span className="feed-statement-action">a adăugat pe raft</span>
+      </div>
+    )
+  }
+
+  if (eventType === 'book_rated') {
+    const rating = metadata?.rating
+    const starText = rating ? (Number(rating) === 1 ? '1 stea' : `${rating} stele`) : null
+    return (
+      <div className="feed-statement">
+        {userBtn}
+        <span className="feed-statement-action">a acordat</span>
+        {starText ? (
+          <span className="feed-statement-highlight">{starText}</span>
+        ) : (
+          <span className="feed-statement-action">o notă</span>
+        )}
+      </div>
+    )
+  }
+
+  if (eventType === 'collection_created' || eventType === 'collection_updated') {
+    const isUpdate = eventType === 'collection_updated'
+    const title = collection?.title
+    return (
+      <div className="feed-statement">
+        {userBtn}
+        <span className="feed-statement-action">
+          {isUpdate ? 'a actualizat colecția' : 'a creat colecția'}
+        </span>
+        {title && <span className="feed-statement-highlight">„{title}”</span>}
+      </div>
+    )
+  }
+
+  if (eventType === 'csv_upload') {
+    const count = metadata?.count
+    return (
+      <div className="feed-statement">
+        {userBtn}
+        <span className="feed-statement-action">a importat</span>
+        <span className="feed-statement-highlight">{count ? `${count} cărți` : 'cărți'}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="feed-statement">
+      {userBtn}
+      <span className="feed-statement-action">a actualizat biblioteca</span>
+    </div>
+  )
 }
 
 const fetchBooksFromApi = async (apiUrl, signal) => {
@@ -847,6 +971,10 @@ function App() {
   const [isExploreMode, setIsExploreMode] = useState(
     () => isRootPath(window.location.pathname) || !initialRouteState.userId,
   )
+  const [feedEvents, setFeedEvents] = useState([])
+  const [isLoadingFeed, setIsLoadingFeed] = useState(false)
+  const [quickAddingBookId, setQuickAddingBookId] = useState(null)
+  const hasLoadedFeedRef = useRef(false)
   const [showNewCollectionInput, setShowNewCollectionInput] = useState(false)
   const [newCollectionTitle, setNewCollectionTitle] = useState('')
   const [newCollectionDescription, setNewCollectionDescription] = useState('')
@@ -869,6 +997,61 @@ function App() {
   const [collectionActionInProgressId, setCollectionActionInProgressId] = useState(null)
   const shelfDropdownRef = useRef(null)
   const enrichingBookIdsRef = useRef(new Set())
+  const bookMetadataCacheRef = useRef(new Map())
+  const [isDescriptionLoading, setIsDescriptionLoading] = useState(false)
+
+  const getCachedBookMetadata = useCallback((book) => {
+    if (!book) return null
+    const bId = String(book.bookId || book.id || '').trim()
+    const isbn = String(book.isbn || book.isbn13 || '').replace(/[^0-9X]/gi, '').trim()
+    if (bId && bookMetadataCacheRef.current.has(bId)) {
+      return bookMetadataCacheRef.current.get(bId)
+    }
+    if (isbn && bookMetadataCacheRef.current.has(isbn)) {
+      return bookMetadataCacheRef.current.get(isbn)
+    }
+    return null
+  }, [])
+
+  const setCachedBookMetadata = useCallback((bookId, isbn, data) => {
+    if (!data) return
+    const bId = String(bookId || '').trim()
+    const cleanI = String(isbn || '').replace(/[^0-9X]/gi, '').trim()
+    if (bId) {
+      const existing = bookMetadataCacheRef.current.get(bId) || {}
+      bookMetadataCacheRef.current.set(bId, { ...existing, ...data })
+    }
+    if (cleanI) {
+      const existing = bookMetadataCacheRef.current.get(cleanI) || {}
+      bookMetadataCacheRef.current.set(cleanI, { ...existing, ...data })
+    }
+  }, [])
+
+  const enrichBookWithCache = useCallback((book) => {
+    if (!book) return book
+    const cached = getCachedBookMetadata(book)
+    if (!cached) {
+      if (book.description) {
+        setCachedBookMetadata(book.bookId || book.id, book.isbn, {
+          description: book.description,
+          pages: book.pages,
+          publishedYear: book.publishedYear,
+          mainCategory: book.mainCategory,
+          coverUrl: book.imageUrl || book.coverUrl,
+        })
+      }
+      return book
+    }
+    return {
+      ...book,
+      description: book.description || cached.description || '',
+      pages: book.pages || cached.pages || cached.pageCount || '',
+      publishedYear: book.publishedYear || cached.publishedYear || '',
+      mainCategory: book.mainCategory || cached.mainCategory || '',
+      imageUrl: book.imageUrl || cached.coverUrl || cached.imageUrl || '',
+      coverUrl: book.coverUrl || cached.coverUrl || cached.imageUrl || '',
+    }
+  }, [getCachedBookMetadata, setCachedBookMetadata])
   const [userShelvesByBookId, setUserShelvesByBookId] = useState({})
   const [isLoading, setIsLoading] = useState(true)
   const [isShelfReady, setIsShelfReady] = useState(false)
@@ -1008,6 +1191,53 @@ function App() {
     return userCollections
   }, [userCollections, activeCollectionFilter, isOwnProfile])
 
+  const mergedFeedItems = useMemo(() => {
+    const collectionEventsById = new Set()
+    for (const ev of feedEvents) {
+      if (ev.collection?.collectionId) {
+        collectionEventsById.add(String(ev.collection.collectionId))
+      }
+    }
+
+    const collectionFeedItems = (exploreCollections || [])
+      .filter((col) => !col.isPrivate && !collectionEventsById.has(String(col.id)))
+      .filter((col) => Array.isArray(col.books) && col.books.length > 0)
+      .map((col) => ({
+        id: `col-${col.id}`,
+        eventType: 'collection_created',
+        createdAt: col.updatedAt || col.createdAt,
+        user: {
+          userId: col.userId,
+          displayName: col.username || col.userId,
+        },
+        collection: {
+          collectionId: String(col.id),
+          title: col.title,
+          description: col.description,
+          isPrivate: false,
+          books: col.books || [],
+        },
+        books: (col.books || []).map((b) => ({
+          ...b,
+          imageUrl: b.imageUrl || b.coverUrl || '',
+          coverUrl: b.coverUrl || b.imageUrl || '',
+        })),
+        metadata: {},
+      }))
+
+    const combined = [...feedEvents, ...collectionFeedItems]
+    const withBooks = combined.filter(
+      (ev) => ev.book || (Array.isArray(ev.books) && ev.books.length > 0),
+    )
+
+    withBooks.sort((a, b) => {
+      const timeA = new Date(a.createdAt || 0).getTime()
+      const timeB = new Date(b.createdAt || 0).getTime()
+      return timeB - timeA
+    })
+    return withBooks
+  }, [feedEvents, exploreCollections])
+
   useEffect(() => {
     if (activeShelf !== 'collections' || !currentUserId) return
 
@@ -1043,6 +1273,19 @@ function App() {
         if (!isCancelled && Array.isArray(data?.collections)) {
           collectionsByUserIdCacheRef.current.set(currentUserId, data.collections)
           setUserCollections(data.collections)
+          for (const col of data.collections) {
+            for (const b of col.books || []) {
+              if (b && (b.description || b.pages || b.mainCategory)) {
+                setCachedBookMetadata(b.bookId || b.id, b.isbn, {
+                  description: b.description,
+                  pages: b.pages,
+                  publishedYear: b.publishedYear,
+                  mainCategory: b.mainCategory,
+                  coverUrl: b.imageUrl || b.coverUrl,
+                })
+              }
+            }
+          }
           if (isOwnProfile) {
             setUserCollectionSummaries(
               data.collections.map((c) => ({ id: String(c.id), title: c.title })),
@@ -1094,6 +1337,19 @@ function App() {
         if (!isCancelled && Array.isArray(data?.collections)) {
           hasLoadedExploreCollectionsRef.current = true
           setExploreCollections(data.collections)
+          for (const col of data.collections) {
+            for (const b of col.books || []) {
+              if (b && (b.description || b.pages || b.mainCategory)) {
+                setCachedBookMetadata(b.bookId || b.id, b.isbn, {
+                  description: b.description,
+                  pages: b.pages,
+                  publishedYear: b.publishedYear,
+                  mainCategory: b.mainCategory,
+                  coverUrl: b.imageUrl || b.coverUrl,
+                })
+              }
+            }
+          }
         }
       })
       .catch((err) => {
@@ -1107,6 +1363,50 @@ function App() {
       isCancelled = true
     }
   }, [isExploreMode, collectionsRefreshTrigger])
+
+  useEffect(() => {
+    if (!isExploreMode) return
+
+    if (hasLoadedFeedRef.current) {
+      setIsLoadingFeed(false)
+      return undefined
+    }
+
+    let isCancelled = false
+    setIsLoadingFeed(true)
+    fetch('/api/feed?limit=30', { cache: 'no-cache' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!isCancelled && Array.isArray(data?.events)) {
+          hasLoadedFeedRef.current = true
+          setFeedEvents(data.events)
+          for (const evt of data.events) {
+            const allEvtBooks = Array.isArray(evt.books) ? evt.books : evt.book ? [evt.book] : []
+            for (const b of allEvtBooks) {
+              if (b && (b.description || b.pages || b.mainCategory)) {
+                setCachedBookMetadata(b.bookId || b.id, b.isbn, {
+                  description: b.description,
+                  pages: b.pages,
+                  publishedYear: b.publishedYear,
+                  mainCategory: b.mainCategory,
+                  coverUrl: b.imageUrl || b.coverUrl,
+                })
+              }
+            }
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to fetch feed events:', err)
+      })
+      .finally(() => {
+        if (!isCancelled) setIsLoadingFeed(false)
+      })
+
+    return () => {
+      isCancelled = true
+    }
+  }, [isExploreMode])
 
   useEffect(() => {
     const handleResize = () => {
@@ -1505,6 +1805,17 @@ function App() {
           description: apiDescription,
         })
         setBooks(apiBooks)
+        for (const b of apiBooks) {
+          if (b && (b.description || b.pages || b.mainCategory)) {
+            setCachedBookMetadata(b.bookId || b.id, b.isbn, {
+              description: b.description,
+              pages: b.pages,
+              publishedYear: b.publishedYear,
+              mainCategory: b.mainCategory,
+              coverUrl: b.imageUrl || b.coverUrl,
+            })
+          }
+        }
         if (apiUsername) {
           setUsername(apiUsername)
           if (!supabaseUserRef.current) {
@@ -1558,6 +1869,17 @@ function App() {
         })
         if (!isExploreMode && activeShelf !== 'collections' && String(currentUserId) === activeUserStr) {
           setBooks(apiBooks)
+          for (const b of apiBooks) {
+            if (b && (b.description || b.pages || b.mainCategory)) {
+              setCachedBookMetadata(b.bookId || b.id, b.isbn, {
+                description: b.description,
+                pages: b.pages,
+                publishedYear: b.publishedYear,
+                mainCategory: b.mainCategory,
+                coverUrl: b.imageUrl || b.coverUrl,
+              })
+            }
+          }
           if (apiUsername) {
             setUsername(apiUsername)
             if (!supabaseUserRef.current) {
@@ -1628,10 +1950,10 @@ function App() {
 
     if (matchedBook) {
       setSelectedBook((prev) => {
-        if (prev && String(prev.bookId || prev.id) === String(matchedBook.bookId || matchedBook.id)) {
-          return { ...prev, ...matchedBook }
-        }
-        return matchedBook
+        const target = prev && String(prev.bookId || prev.id) === String(matchedBook.bookId || matchedBook.id)
+          ? { ...prev, ...matchedBook }
+          : matchedBook
+        return enrichBookWithCache(target)
       })
       setError('')
       return
@@ -1665,28 +1987,83 @@ function App() {
   }, [selectedBook, currentUserId, cookieUserId, activeShelf])
 
   useEffect(() => {
-    if (!selectedBook) return
+    if (!selectedBook) {
+      setIsDescriptionLoading(false)
+      return
+    }
     const bookId = String(selectedBook.bookId || selectedBook.id || '')
-    if (!bookId) return
+    if (!bookId) {
+      setIsDescriptionLoading(false)
+      return
+    }
 
-    if (!enrichingBookIdsRef.current.has(bookId)) {
-      enrichingBookIdsRef.current.add(bookId)
-      const userIdToUse = currentUserId || cookieUserId || ''
-
-      fetch('/api/isbn', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: selectedBook.title,
-          author: selectedBook.author,
-          isbn: selectedBook.isbn,
-          bookId,
-          userId: userIdToUse,
-        }),
+    if (selectedBook.description) {
+      setIsDescriptionLoading(false)
+      setCachedBookMetadata(bookId, selectedBook.isbn, {
+        description: selectedBook.description,
+        pages: selectedBook.pages,
+        publishedYear: selectedBook.publishedYear,
+        mainCategory: selectedBook.mainCategory,
+        coverUrl: selectedBook.imageUrl || selectedBook.coverUrl,
       })
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data) => {
-          if (!data) return
+      return
+    }
+
+    const cached = getCachedBookMetadata(selectedBook)
+    if (cached?.description) {
+      setSelectedBook((prev) => {
+        if (!prev) return prev
+        const curId = String(prev.bookId || prev.id || '')
+        if (curId === bookId) {
+          return {
+            ...prev,
+            description: cached.description,
+            pages: prev.pages || cached.pages || cached.pageCount,
+            publishedYear: prev.publishedYear || cached.publishedYear,
+            mainCategory: prev.mainCategory || cached.mainCategory,
+            imageUrl: prev.imageUrl || cached.coverUrl || cached.imageUrl,
+          }
+        }
+        return prev
+      })
+      setIsDescriptionLoading(false)
+      return
+    }
+
+    if (enrichingBookIdsRef.current.has(bookId)) {
+      setIsDescriptionLoading(false)
+      return
+    }
+
+    enrichingBookIdsRef.current.add(bookId)
+    setIsDescriptionLoading(true)
+    const userIdToUse = currentUserId || cookieUserId || ''
+    let isCurrent = true
+
+    fetch('/api/isbn', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: selectedBook.title,
+        author: selectedBook.author,
+        isbn: selectedBook.isbn,
+        bookId,
+        userId: userIdToUse,
+      }),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return
+        const meta = {
+          description: data.description || '',
+          pages: data.pageCount || '',
+          publishedYear: data.publishedYear || '',
+          mainCategory: data.mainCategory || '',
+          coverUrl: data.coverUrl || data.imageUrl || '',
+        }
+        setCachedBookMetadata(bookId, data.isbn || selectedBook.isbn, meta)
+
+        if (isCurrent) {
           setSelectedBook((prev) => {
             if (!prev) return prev
             const curId = String(prev.bookId || prev.id || '')
@@ -1702,28 +2079,74 @@ function App() {
             }
             return prev
           })
+        }
 
-          setBooks((prevBooks) =>
-            prevBooks.map((b) => {
-              if (String(b.bookId || b.id) === bookId) {
-                return {
-                  ...b,
-                  description: data.description || b.description,
-                  pages: b.pages || data.pageCount,
-                  publishedYear: b.publishedYear || data.publishedYear,
-                  mainCategory: data.mainCategory || b.mainCategory,
-                  imageUrl: b.imageUrl || data.coverUrl || data.imageUrl,
-                }
+        setBooks((prevBooks) =>
+          prevBooks.map((b) => {
+            if (String(b.bookId || b.id) === bookId) {
+              return {
+                ...b,
+                description: data.description || b.description,
+                pages: b.pages || data.pageCount,
+                publishedYear: b.publishedYear || data.publishedYear,
+                mainCategory: data.mainCategory || b.mainCategory,
+                imageUrl: b.imageUrl || data.coverUrl || data.imageUrl,
               }
-              return b
-            }),
-          )
-        })
-        .catch(() => {
-          // On-demand enrichment is best effort
-        })
+            }
+            return b
+          }),
+        )
+
+        setFeedEvents((prevEvents) =>
+          prevEvents.map((evt) => {
+            let updated = false
+            const updatedEvtBook =
+              evt.book && String(evt.book.bookId || evt.book.id) === bookId
+                ? {
+                  ...evt.book,
+                  description: data.description || evt.book.description,
+                  pages: evt.book.pages || data.pageCount,
+                  publishedYear: evt.book.publishedYear || data.publishedYear,
+                  imageUrl: evt.book.imageUrl || data.coverUrl || data.imageUrl,
+                }
+                : evt.book
+
+            const updatedBooks = Array.isArray(evt.books)
+              ? evt.books.map((b) => {
+                if (String(b.bookId || b.id) === bookId) {
+                  updated = true
+                  return {
+                    ...b,
+                    description: data.description || b.description,
+                    pages: b.pages || data.pageCount,
+                    publishedYear: b.publishedYear || data.publishedYear,
+                    imageUrl: b.imageUrl || data.coverUrl || data.imageUrl,
+                  }
+                }
+                return b
+              })
+              : evt.books
+
+            if (updated || updatedEvtBook !== evt.book) {
+              return { ...evt, book: updatedEvtBook, books: updatedBooks }
+            }
+            return evt
+          }),
+        )
+      })
+      .catch(() => {
+        // On-demand enrichment is best effort
+      })
+      .finally(() => {
+        if (isCurrent) {
+          setIsDescriptionLoading(false)
+        }
+      })
+
+    return () => {
+      isCurrent = false
     }
-  }, [selectedBook?.bookId, selectedBook?.id, currentUserId, cookieUserId])
+  }, [selectedBook?.bookId, selectedBook?.id, selectedBook?.description, currentUserId, cookieUserId, getCachedBookMetadata, setCachedBookMetadata])
 
   useEffect(() => {
     if (!shelfDropdownOpen) return
@@ -2055,7 +2478,7 @@ function App() {
     const nextPath = `/${currentUserId}/${activeShelf}/${encodeURIComponent(bookId)}`
     window.history.pushState({}, '', nextPath)
     setRequestedBookId(bookId)
-    setSelectedBook(book)
+    setSelectedBook(enrichBookWithCache(book))
     setError('')
   }
 
@@ -2609,7 +3032,7 @@ function App() {
   const handleOpenCollectionBook = (book, collection) => {
     if (!book || !collection) return
     setActiveModalCollection(collection)
-    setSelectedBook(book)
+    setSelectedBook(enrichBookWithCache(book))
     setError('')
   }
 
@@ -2624,13 +3047,137 @@ function App() {
     window.history.pushState({}, '', `/${creatorUserId}/collections`)
   }
 
+  const handleVisitUserProfile = (targetUserId, targetShelf = 'read') => {
+    if (!targetUserId) return
+    setIsExploreMode(false)
+    setActiveShelf(targetShelf)
+    setCurrentUserId(String(targetUserId))
+    setRequestedBookId('')
+    setSelectedBook(null)
+    setActiveModalCollection(null)
+    if (targetShelf !== 'collections') {
+      setIsShelfReady(false)
+    }
+    window.history.pushState({}, '', `/${targetUserId}/${targetShelf}`)
+  }
+
+  const isFeedBookSaved = (book) => {
+    if (!book) return false
+    const bookId = String(book.bookId || book.id || '')
+    if (bookId && userShelvesByBookId[bookId]) return true
+    const cleanIsbn = String(book.isbn || '').replace(/[^0-9X]/gi, '').trim()
+    if (cleanIsbn) {
+      return Object.values(userShelvesByBookId).some((b) => {
+        const itemIsbn = String(b.isbn || b.isbn13 || '').replace(/[^0-9X]/gi, '').trim()
+        return itemIsbn && itemIsbn === cleanIsbn
+      })
+    }
+    return false
+  }
+
+  const handleQuickAddFeedBook = async (book, e) => {
+    if (e) {
+      e.stopPropagation()
+    }
+    if (!book) return
+
+    const activeUserId = cookieUserId || getUserIdFromCookie()
+    if (!activeUserId || !isUserLoggedIn) {
+      setShowProfileModal(true)
+      return
+    }
+
+    const bookId = String(book.bookId || book.id || '')
+    if (!bookId) return
+
+    if (isFeedBookSaved(book)) return
+
+    setQuickAddingBookId(bookId)
+
+    // Optimistic update
+    setUserShelvesByBookId((prev) => ({
+      ...prev,
+      [bookId]: {
+        ...(prev[bookId] || {}),
+        bookId,
+        shelf: 'to-read',
+        title: book.title || '',
+        author: book.author || '',
+        isbn: book.isbn || '',
+        imageUrl: book.imageUrl || book.coverUrl || '',
+      },
+    }))
+
+    try {
+      const res = await fetch('/api/shelves', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: activeUserId,
+          bookId,
+          shelf: 'to-read',
+          book: {
+            bookId,
+            title: book.title || '',
+            author: book.author || '',
+            isbn: book.isbn || '',
+            coverUrl: book.imageUrl || book.coverUrl || '',
+            pages: book.pages,
+            publishedYear: book.publishedYear,
+            publisher: book.publisher,
+          },
+        }),
+      })
+
+      if (!res.ok) {
+        throw new Error('Failed to add book to shelf')
+      }
+
+      const data = await res.json()
+      const savedShelfName = data?.shelf || 'to-read'
+      setUserShelvesByBookId((prev) => ({
+        ...prev,
+        [bookId]: {
+          ...(prev[bookId] || {}),
+          bookId,
+          shelf: savedShelfName,
+          title: book.title || '',
+          author: book.author || '',
+          isbn: book.isbn || '',
+        },
+      }))
+    } catch (err) {
+      console.error('Error quick-adding book to to-read:', err)
+      setUserShelvesByBookId((prev) => {
+        const copy = { ...prev }
+        delete copy[bookId]
+        return copy
+      })
+    } finally {
+      setQuickAddingBookId(null)
+    }
+  }
+
+  const handleOpenFeedBook = (book) => {
+    if (!book) return
+    const normalizedBook = enrichBookWithCache({
+      ...book,
+      id: book.id || book.bookId,
+      bookId: book.bookId || book.id,
+      imageUrl: book.imageUrl || book.coverUrl,
+      coverUrl: book.coverUrl || book.imageUrl,
+    })
+    setSelectedBook(normalizedBook)
+    setError('')
+  }
+
   const handleSelectSearchBook = (book) => {
     if (targetCollectionForSearch) {
       handleAddBookToCollectionFromSearch(book)
       return
     }
     setOpenedFromSearch(true)
-    setSelectedBook(book)
+    setSelectedBook(enrichBookWithCache(book))
   }
 
   const handleHeaderClick = () => {
@@ -3231,7 +3778,7 @@ function App() {
       window.history.replaceState({}, '', `/${currentUserId}/${nextShelf}/${encodeURIComponent(nextBookId)}`)
       setRequestedBookId(nextBookId)
     }
-    setSelectedBook(nextBook)
+    setSelectedBook(enrichBookWithCache(nextBook))
     setShelfDropdownOpen(false)
   }
 
@@ -4423,6 +4970,12 @@ function App() {
 
                   {selectedBook.description ? (
                     <p className="book-detail-description-text">{selectedBook.description}</p>
+                  ) : isDescriptionLoading ? (
+                    <div className="book-detail-description-skeleton" aria-hidden="true">
+                      <div className="skeleton-line" />
+                      <div className="skeleton-line" />
+                      <div className="skeleton-line short" />
+                    </div>
                   ) : null}
 
                   {loggedInUserBook?.myReview ? (
@@ -4694,8 +5247,173 @@ function App() {
 
         {error ? <div className="status-banner">{error}</div> : null}
 
-        {isExploreMode || activeShelf === 'collections' ? (
-          <section className="collections-section" aria-label={isExploreMode ? 'Explorează colecții publice' : 'Colecții'}>
+        {isExploreMode ? (
+          <section className="collections-section" aria-label="Descoperă noutăți și colecții">
+            {(isLoadingFeed || isLoadingCollections) && mergedFeedItems.length === 0 ? (
+              <div className="feed-container" aria-live="polite" aria-label="Se încarcă noutățile">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={`feed-skeleton-${i}`} className="feed-event-card" style={{ opacity: 0.7 }}>
+                    <div className="feed-event-header">
+                      <div className="loading-text short" style={{ width: 120, height: 22, borderRadius: 9999 }} />
+                      <div className="loading-text short" style={{ width: 60, height: 16 }} />
+                    </div>
+                    <div className="feed-single-book-card">
+                      <div className="loading-cover" style={{ width: 110, height: 165, borderRadius: 8 }} />
+                      <div className="feed-single-book-info" style={{ gap: 8, width: '100%' }}>
+                        <div className="loading-text" style={{ width: '80%', height: 20 }} />
+                        <div className="loading-text short" style={{ width: '50%', height: 16 }} />
+                        <div className="loading-text short" style={{ width: 130, height: 32, borderRadius: 9999, marginTop: 12 }} />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : mergedFeedItems.length === 0 ? (
+              <div className="feed-empty-state">
+                <Sparkles size={36} className="feed-empty-icon" />
+                <h2>Nu există activitate recentă</h2>
+                <p>Cărțile adăugate pe rafturi sau în colecții vor apărea aici.</p>
+              </div>
+            ) : (
+              <div className="feed-container">
+                {mergedFeedItems.map((event, eventIndex) => {
+                  const isMultiBook = Array.isArray(event.books) && event.books.length > 1
+
+                  if (isMultiBook) {
+                    return (
+                      <article key={event.id} className="feed-event-card">
+                        <div className="feed-event-header">
+                          {renderFeedStatement(event, handleVisitUserProfile)}
+                          <span className="feed-time">{formatEventTime(event.createdAt)}</span>
+                        </div>
+
+                        {event.collection?.description && (
+                          <p className="feed-collection-description">{event.collection.description}</p>
+                        )}
+
+                        <div className="feed-multi-books">
+                          <div className="feed-books-carousel">
+                            {event.books.map((b, bIdx) => {
+                              const isSaved = isFeedBookSaved(b)
+                              const isAdding = quickAddingBookId === String(b.bookId || b.id)
+                              return (
+                                <div key={`${event.id}-${b.bookId || b.id || bIdx}`} className="feed-carousel-card">
+                                  <BookCoverCard
+                                    book={b}
+                                    isPriority={eventIndex < 2 && bIdx < 3}
+                                    onClick={() => handleOpenFeedBook(b)}
+                                  />
+                                  <button
+                                    type="button"
+                                    className={`feed-quick-add-btn-mini ${isSaved ? 'is-saved' : ''}`}
+                                    disabled={isSaved || isAdding}
+                                    onClick={(e) => handleQuickAddFeedBook(b, e)}
+                                    title={isSaved ? 'Pe raft' : 'Adaugă la De citit'}
+                                  >
+                                    {isAdding ? (
+                                      <Loader2 size={11} className="animate-spin" />
+                                    ) : isSaved ? (
+                                      <Check size={11} strokeWidth={2.5} />
+                                    ) : (
+                                      <Plus size={11} strokeWidth={2.5} />
+                                    )}
+                                    <span>{isSaved ? 'Pe raft' : 'Adaugă'}</span>
+                                  </button>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      </article>
+                    )
+                  }
+
+                  const singleBook = (event.books && event.books[0]) || event.book
+                  if (!singleBook) return null
+
+                  const isSaved = isFeedBookSaved(singleBook)
+                  const isAdding = quickAddingBookId === String(singleBook.bookId || singleBook.id)
+
+                  return (
+                    <article key={event.id} className="feed-event-card">
+                      <div className="feed-event-header">
+                        {renderFeedStatement(event, handleVisitUserProfile)}
+                        <span className="feed-time">{formatEventTime(event.createdAt)}</span>
+                      </div>
+
+                      {event.collection?.description && (
+                        <p className="feed-collection-description">{event.collection.description}</p>
+                      )}
+
+                      <div className="feed-single-book-card">
+                        <div className="feed-single-book-cover">
+                          <BookCoverCard
+                            book={singleBook}
+                            isPriority={eventIndex < 4}
+                            onClick={() => handleOpenFeedBook(singleBook)}
+                          />
+                        </div>
+
+                        <div className="feed-single-book-info">
+                          <h3
+                            className="feed-book-title"
+                            onClick={() => handleOpenFeedBook(singleBook)}
+                            title={singleBook.title}
+                          >
+                            {singleBook.title || 'Fără titlu'}
+                          </h3>
+                          {singleBook.author && (
+                            <p className="feed-book-author">{singleBook.author}</p>
+                          )}
+
+                          {event.eventType === 'book_rated' && event.metadata?.rating && (
+                            <div className="feed-book-rating" title={`Rating: ${event.metadata.rating} stele`}>
+                              {Array.from({ length: 5 }).map((_, i) => (
+                                <Star
+                                  key={i}
+                                  size={15}
+                                  className={i < Number(event.metadata.rating) ? 'fill-amber-400 text-amber-400' : 'text-zinc-600'}
+                                />
+                              ))}
+                            </div>
+                          )}
+
+                          <div className="feed-single-book-actions">
+                            <button
+                              type="button"
+                              className={`feed-quick-add-btn ${isSaved ? 'is-saved' : ''}`}
+                              disabled={isSaved || isAdding}
+                              onClick={(e) => handleQuickAddFeedBook(singleBook, e)}
+                              title={isSaved ? 'Cartea este deja pe raftul tău' : 'Adaugă pe raftul De citit'}
+                            >
+                              {isAdding ? (
+                                <>
+                                  <Loader2 size={14} className="animate-spin" />
+                                  <span>Se adaugă...</span>
+                                </>
+                              ) : isSaved ? (
+                                <>
+                                  <Check size={14} strokeWidth={2.5} />
+                                  <span>Pe raft</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Plus size={14} strokeWidth={2.5} />
+                                  <span>Vreau să citesc</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+        ) : activeShelf === 'collections' ? (
+          <section className="collections-section" aria-label="Colecții">
             {isLoadingCollections ? (
               <div className="books-carousel loading-carousel" aria-live="polite" aria-label="Loading collections">
                 {Array.from({ length: 4 }).map((_, index) => (
@@ -4706,21 +5424,19 @@ function App() {
                   </div>
                 ))}
               </div>
-            ) : (isExploreMode ? exploreCollections : filteredUserCollections).length === 0 ? (
+            ) : filteredUserCollections.length === 0 ? (
               <div className="collections-empty-state">
                 <Library size={32} className="collections-empty-icon" />
                 <h2>
-                  {isExploreMode
-                    ? 'Nu există încă nicio colecție publică.'
-                    : userCollections.length > 0 && activeCollectionFilter === 'private'
-                      ? 'Nu există nicio colecție privată.'
-                      : userCollections.length > 0 && activeCollectionFilter === 'public'
-                        ? 'Nu există nicio colecție publică.'
-                        : isOwnProfile
-                          ? 'Nu ai creat încă nicio colecție.'
-                          : 'Acest utilizator nu are încă nicio colecție.'}
+                  {userCollections.length > 0 && activeCollectionFilter === 'private'
+                    ? 'Nu există nicio colecție privată.'
+                    : userCollections.length > 0 && activeCollectionFilter === 'public'
+                      ? 'Nu există nicio colecție publică.'
+                      : isOwnProfile
+                        ? 'Nu ai creat încă nicio colecție.'
+                        : 'Acest utilizator nu are încă nicio colecție.'}
                 </h2>
-                {!isExploreMode && isOwnProfile && !showNewCollectionInput ? (
+                {isOwnProfile && !showNewCollectionInput ? (
                   <button
                     type="button"
                     className="collections-new-trigger-btn"
@@ -4737,7 +5453,7 @@ function App() {
             ) : (
               <div className="collections-rows-list">
                 {
-                  (isExploreMode ? exploreCollections : filteredUserCollections).map((collection) => {
+                  filteredUserCollections.map((collection) => {
                     const activeUser = getActiveCollectionUserId()
                     const isCollectionOwner = Boolean(
                       isUserLoggedIn && activeUser && String(collection.userId) === String(activeUser),
@@ -4746,9 +5462,9 @@ function App() {
                       <CollectionRow
                         key={collection.id}
                         collection={collection}
-                        isOwner={isExploreMode ? false : isCollectionOwner}
-                        isExplore={isExploreMode}
-                        showCreator={isExploreMode}
+                        isOwner={isCollectionOwner}
+                        isExplore={false}
+                        showCreator={false}
                         onSelectCreator={handleSelectExploreCreator}
                         onAddBookClick={handleOpenAddBookForCollection}
                         onDeleteCollection={handleDeleteCollection}
