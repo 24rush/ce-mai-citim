@@ -4183,16 +4183,25 @@ function App() {
                 <div className="book-detail-top-section">
                   <div className="book-detail-cover-col">
                     <div className="book-detail-cover">
-                      {selectedBook.imageUrl ? (
-                        <img
-                          src={selectedBook.imageUrl}
-                          alt={`${selectedBook.title} cover`}
-                          loading="eager"
-                          decoding="async"
-                        />
-                      ) : (
-                        <div className="book-cover-placeholder" aria-hidden="true" />
-                      )}
+                      <BookCover3D
+                        thickness={selectedBook.thickness || (selectedBook.pages ? Math.min(Math.max(Math.round(selectedBook.pages / 8), 18), 80) : 24)}
+                      >
+                        <div className="book-cover-art">
+                          {selectedBook.imageUrl ? (
+                            <img
+                              src={selectedBook.imageUrl}
+                              alt={`${selectedBook.title} cover`}
+                              loading="eager"
+                              decoding="async"
+                              className="loaded"
+                              onError={(e) => {
+                                e.currentTarget.style.display = 'none'
+                              }}
+                            />
+                          ) : null}
+                          <div className="book-cover-placeholder" aria-hidden="true" />
+                        </div>
+                      </BookCover3D>
                     </div>
                   </div>
 
