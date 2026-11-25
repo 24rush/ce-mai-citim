@@ -3200,1129 +3200,1178 @@ function App() {
     window.history.pushState({}, '', `/${targetUserId}/${targetShelf}`)
   }
 
-  const isFeedBookSaved = (book) => {
-    if (!book) return false
+  const getFeedBookSavedEntry = (book) => {
+    if (!book) return null
     const bookId = String(book.bookId || book.id || '')
-    if (bookId && userShelvesByBookId[bookId]) return true
+    if (bookId && userShelvesByBookId[bookId]) return userShelvesByBookId[bookId]
     const cleanIsbn = String(book.isbn || '').replace(/[^0-9X]/gi, '').trim()
     if (cleanIsbn) {
-      return Object.values(userShelvesByBookId).some((b) => {
-        const itemIsbn = String(b.isbn || b.isbn13 || '').replace(/[^0-9X]/gi, '').trim()
-        return itemIsbn && itemIsbn === cleanIsbn
-      })
+      return (
+        Object.values(userShelvesByBookId).find((b) => {
+          const itemIsbn = String(b.isbn || b.isbn13 || '').replace(/[^0-9X]/gi, '').trim()
+          return itemIsbn && itemIsbn === cleanIsbn
+        }) || null
+      )
     }
-    return false
+    return null
   }
 
-  const syncSavedBookIntoLibrary = (ownerUserId, sourceBook, savedShelfName, apiData = {}) => {
-    const ownerStr = String(ownerUserId || '').trim()
-    const bookId = String(sourceBook?.bookId || sourceBook?.id || '').trim()
-    if (!ownerStr || !bookId) return
+  const isFeedBookSaved = (book) => Boolean(getFeedBookSavedEntry(book))
 
-    const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '/')
-    const finalDateAdded = apiData?.dateAdded || todayStr
-    const finalDateRead =
-      apiData?.dateRead || (savedShelfName === 'read' ? todayStr : '')
-    const finalUpdatedAt = apiData?.updatedAt || new Date().toISOString()
+  const getFeedBookSavedShelfLabel = (book) => {
+    const entry = getFeedBookSavedEntry(book)
+    if (!entry) return ''
+    return getShelfLabel(entry.shelf || entry.bookshelves)
+  }
 
-    const applyToBookList = (list = []) => {
-      const exists = list.some(
-        (b) =>
+const syncSavedBookIntoLibrary = (ownerUserId, sourceBook, savedShelfName, apiData = {}) => {
+  const ownerStr = String(ownerUserId || '').trim()
+  const bookId = String(sourceBook?.bookId || sourceBook?.id || '').trim()
+  if (!ownerStr || !bookId) return
+
+  const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '/')
+  const finalDateAdded = apiData?.dateAdded || todayStr
+  const finalDateRead =
+    apiData?.dateRead || (savedShelfName === 'read' ? todayStr : '')
+  const finalUpdatedAt = apiData?.updatedAt || new Date().toISOString()
+
+  const applyToBookList = (list = []) => {
+    const exists = list.some(
+      (b) =>
+        String(b.bookId || '') === bookId ||
+        String(b.id || '') === bookId ||
+        (sourceBook.id && String(b.id) === String(sourceBook.id)),
+    )
+    if (exists) {
+      return list.map((b) => {
+        const isMatch =
           String(b.bookId || '') === bookId ||
           String(b.id || '') === bookId ||
-          (sourceBook.id && String(b.id) === String(sourceBook.id)),
-      )
-      if (exists) {
-        return list.map((b) => {
-          const isMatch =
-            String(b.bookId || '') === bookId ||
-            String(b.id || '') === bookId ||
-            (sourceBook.id && String(b.id) === String(sourceBook.id))
-          return isMatch
-            ? {
-              ...b,
-              bookshelves: savedShelfName,
-              dateAdded: finalDateAdded,
-              'Date Added': finalDateAdded,
-              readAt: finalDateRead,
-              'Date Read': finalDateRead,
-              updatedAt: finalUpdatedAt,
-            }
-            : b
-        })
-      }
-
-      const normalized = normalizeCsvBook(
-        {
-          ...sourceBook,
-          'Book Id': bookId,
-          Title: sourceBook.title || '',
-          Author: sourceBook.author || '',
-          ISBN: sourceBook.isbn || '',
-          'Number of Pages': sourceBook.pages || '',
-          'Original Publication Year': sourceBook.publishedYear || '',
-          Publisher: sourceBook.publisher || '',
-          Binding: sourceBook.binding || '',
-          Bookshelves: savedShelfName,
-          'Date Added': finalDateAdded,
-          'Date Read': finalDateRead,
-          updatedAt: finalUpdatedAt,
-          description: sourceBook.description || '',
-          mainCategory: sourceBook.mainCategory || '',
-          imageUrl: sourceBook.imageUrl || sourceBook.coverUrl || '',
-        },
-        0,
-      )
-      return [normalized, ...list]
+          (sourceBook.id && String(b.id) === String(sourceBook.id))
+        return isMatch
+          ? {
+            ...b,
+            bookshelves: savedShelfName,
+            dateAdded: finalDateAdded,
+            'Date Added': finalDateAdded,
+            readAt: finalDateRead,
+            'Date Read': finalDateRead,
+            updatedAt: finalUpdatedAt,
+          }
+          : b
+      })
     }
 
-    if (booksByUserIdCacheRef.current.has(ownerStr)) {
-      const cached = booksByUserIdCacheRef.current.get(ownerStr)
-      if (cached && Array.isArray(cached.books)) {
-        booksByUserIdCacheRef.current.set(ownerStr, {
-          ...cached,
-          books: applyToBookList(cached.books),
-        })
-      }
-    }
-
-    if (!currentUserId || String(currentUserId) === ownerStr) {
-      setBooks((prevBooks) => applyToBookList(prevBooks))
-    }
-
-    setBooksFetchTrigger((prev) => prev + 1)
+    const normalized = normalizeCsvBook(
+      {
+        ...sourceBook,
+        'Book Id': bookId,
+        Title: sourceBook.title || '',
+        Author: sourceBook.author || '',
+        ISBN: sourceBook.isbn || '',
+        'Number of Pages': sourceBook.pages || '',
+        'Original Publication Year': sourceBook.publishedYear || '',
+        Publisher: sourceBook.publisher || '',
+        Binding: sourceBook.binding || '',
+        Bookshelves: savedShelfName,
+        'Date Added': finalDateAdded,
+        'Date Read': finalDateRead,
+        updatedAt: finalUpdatedAt,
+        description: sourceBook.description || '',
+        mainCategory: sourceBook.mainCategory || '',
+        imageUrl: sourceBook.imageUrl || sourceBook.coverUrl || '',
+      },
+      0,
+    )
+    return [normalized, ...list]
   }
 
-  const handleQuickAddFeedBook = async (book, e) => {
-    if (e) {
-      e.stopPropagation()
+  if (booksByUserIdCacheRef.current.has(ownerStr)) {
+    const cached = booksByUserIdCacheRef.current.get(ownerStr)
+    if (cached && Array.isArray(cached.books)) {
+      booksByUserIdCacheRef.current.set(ownerStr, {
+        ...cached,
+        books: applyToBookList(cached.books),
+      })
     }
-    if (!book) return
+  }
 
-    const activeUserId = cookieUserId || getUserIdFromCookie()
-    if (!activeUserId || !isUserLoggedIn) {
-      setShowProfileModal(true)
-      return
-    }
+  if (!currentUserId || String(currentUserId) === ownerStr) {
+    setBooks((prevBooks) => applyToBookList(prevBooks))
+  }
 
-    const bookId = String(book.bookId || book.id || '')
-    if (!bookId) return
+  setBooksFetchTrigger((prev) => prev + 1)
+}
 
-    if (isFeedBookSaved(book)) return
+const handleQuickAddFeedBook = async (book, e) => {
+  if (e) {
+    e.stopPropagation()
+  }
+  if (!book) return
 
-    setQuickAddingBookId(bookId)
+  const activeUserId = cookieUserId || getUserIdFromCookie()
+  if (!activeUserId || !isUserLoggedIn) {
+    setShowProfileModal(true)
+    return
+  }
 
-    // Optimistic update
-    setUserShelvesByBookId((prev) => ({
-      ...prev,
-      [bookId]: {
-        ...(prev[bookId] || {}),
+  const bookId = String(book.bookId || book.id || '')
+  if (!bookId) return
+
+  if (isFeedBookSaved(book)) return
+
+  setQuickAddingBookId(bookId)
+
+  // Optimistic update
+  setUserShelvesByBookId((prev) => ({
+    ...prev,
+    [bookId]: {
+      ...(prev[bookId] || {}),
+      bookId,
+      shelf: 'to-read',
+      title: book.title || '',
+      author: book.author || '',
+      isbn: book.isbn || '',
+      imageUrl: book.imageUrl || book.coverUrl || '',
+    },
+  }))
+
+  try {
+    const res = await fetch('/api/shelves', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: activeUserId,
         bookId,
         shelf: 'to-read',
-        title: book.title || '',
-        author: book.author || '',
-        isbn: book.isbn || '',
-        imageUrl: book.imageUrl || book.coverUrl || '',
-      },
-    }))
-
-    try {
-      const res = await fetch('/api/shelves', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: activeUserId,
+        book: {
           bookId,
-          shelf: 'to-read',
-          book: {
-            bookId,
-            title: book.title || '',
-            author: book.author || '',
-            isbn: book.isbn || '',
-            coverUrl: book.imageUrl || book.coverUrl || '',
-            pages: book.pages,
-            publishedYear: book.publishedYear,
-            publisher: book.publisher,
-          },
-        }),
-      })
-
-      if (!res.ok) {
-        throw new Error('Failed to add book to shelf')
-      }
-
-      const data = await res.json()
-      const savedShelfName = data?.shelf || 'to-read'
-      setUserShelvesByBookId((prev) => ({
-        ...prev,
-        [bookId]: {
-          ...(prev[bookId] || {}),
-          bookId,
-          shelf: savedShelfName,
           title: book.title || '',
           author: book.author || '',
           isbn: book.isbn || '',
-          dateAdded: data?.dateAdded || '',
+          coverUrl: book.imageUrl || book.coverUrl || '',
+          pages: book.pages,
+          publishedYear: book.publishedYear,
+          publisher: book.publisher,
         },
-      }))
-      syncSavedBookIntoLibrary(activeUserId, book, savedShelfName, data)
-    } catch (err) {
-      console.error('Error quick-adding book to to-read:', err)
-      setUserShelvesByBookId((prev) => {
-        const copy = { ...prev }
-        delete copy[bookId]
-        return copy
-      })
-    } finally {
-      setQuickAddingBookId(null)
-    }
-  }
-
-  const normalizeFeedBookItem = (b) =>
-    enrichBookWithCache({
-      ...b,
-      id: b.id || b.bookId,
-      bookId: b.bookId || b.id,
-      imageUrl: b.imageUrl || b.coverUrl,
-      coverUrl: b.coverUrl || b.imageUrl,
+      }),
     })
 
-  const handleOpenFeedBook = (book, event = null) => {
-    if (!book) return
-    const normalizedBook = normalizeFeedBookItem(book)
-
-    const eventBooks = Array.isArray(event?.books) && event.books.length > 0
-      ? event.books
-      : [book]
-
-    if (event && (event.collection || eventBooks.length > 1)) {
-      const colId = event.collection?.collectionId || event.collection?.id || `feed-${event.id}`
-      setActiveModalCollection({
-        id: String(colId),
-        collectionId: String(colId),
-        userId: event.user?.userId || '',
-        title: event.collection?.title || '',
-        description: event.collection?.description || '',
-        books: eventBooks.map(normalizeFeedBookItem),
-      })
-    } else {
-      setActiveModalCollection(null)
+    if (!res.ok) {
+      throw new Error('Failed to add book to shelf')
     }
 
-    setSelectedBook(normalizedBook)
-    setError('')
-  }
-
-  const handleSelectSearchBook = (book) => {
-    if (targetCollectionForSearch) {
-      handleAddBookToCollectionFromSearch(book)
-      return
-    }
-    setOpenedFromSearch(true)
-    setSelectedBook(enrichBookWithCache(book))
-  }
-
-  const handleHeaderClick = () => {
-    setIsExploreMode(true)
-    setActiveModalCollection(null)
-    setRequestedBookId('')
-    setSelectedBook(null)
-    setActiveAuthorFilter('all')
-
-    const ownId = isUserLoggedIn ? (cookieUserId || getUserIdFromCookie() || '') : ''
-    setCurrentUserId(ownId)
-    if (!ownId) {
-      setUsername('')
-      setBooks([])
-    }
-    window.history.pushState({}, '', '/')
-  }
-
-  const handleBackNavigation = () => {
-    setSelectedBook(null)
-    setActiveModalCollection(null)
-    setRequestedBookId('')
-
-    const hasInternalReferrer =
-      typeof document !== 'undefined' &&
-      Boolean(document.referrer && document.referrer.startsWith(window.location.origin))
-
-    const canGoBack = (inAppNavCountRef.current > 0 || hasInternalReferrer) && window.history.length > 1
-
-    if (canGoBack) {
-      window.history.back()
-    } else {
-      handleHeaderClick()
-    }
-  }
-
-  const handleSaveBookToShelf = async (shelfToSave = targetShelf) => {
-    if (!selectedBook) return
-    const activeUser = cookieUserId || getUserIdFromCookie()
-    if (!isUserLoggedIn || !activeUser) {
-      closeBookDetails()
-      setShowProfileModal(true)
-      return
-    }
-
-    const bookId = String(selectedBook.bookId || selectedBook.id || loggedInUserBook?.bookId || '')
-    if (!bookId) return
-
-    try {
-      setIsSavingShelf(true)
-      const response = await fetch('/api/shelves', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: activeUser,
-          bookId,
-          shelf: shelfToSave,
-          book: {
-            bookId,
-            title: selectedBook.title,
-            author: selectedBook.author,
-            isbn: selectedBook.isbn,
-            pages: selectedBook.pages,
-            publishedYear: selectedBook.publishedYear,
-            publisher: selectedBook.publisher,
-            binding: selectedBook.binding,
-            description: selectedBook.description,
-            mainCategory: selectedBook.mainCategory,
-            coverUrl: selectedBook.imageUrl || selectedBook.coverUrl,
-          },
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error(`Failed to save book to shelf: status ${response.status}`)
-      }
-
-      const data = await response.json()
-      const savedShelfName = data.shelf || shelfToSave
-      setTargetShelf(savedShelfName)
-      setSavedShelf(true)
-      if (savedShelfName === 'read') {
-        setShowRatingPopup(true)
-      } else {
-        setShowRatingPopup(false)
-      }
-      const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '/')
-      const todayAddedFormatted = data.dateAdded || todayStr
-      const todayFormatted =
-        data.dateRead ||
-        (savedShelfName === 'read' ? todayStr : '')
-      setUserShelvesByBookId((prev) => {
-        const entry = {
-          ...(prev[bookId] || {}),
-          bookId,
-          shelf: savedShelfName,
-          title: selectedBook.title,
-          author: selectedBook.author,
-          isbn: selectedBook.isbn,
-          dateAdded: todayAddedFormatted,
-          dateRead: todayFormatted,
-        }
-        const next = {
-          ...prev,
-          [bookId]: entry,
-        }
-        if (selectedBook.id && String(selectedBook.id) !== bookId) {
-          next[String(selectedBook.id)] = entry
-        }
-        return next
-      })
-      syncSavedBookIntoLibrary(activeUser, selectedBook, savedShelfName, data)
-      setSelectedBook((prev) => {
-        if (!prev) return prev
-        const isMatch =
-          String(prev.bookId || '') === bookId ||
-          String(prev.id || '') === bookId ||
-          (selectedBook.id && String(prev.id) === String(selectedBook.id))
-        if (!isMatch) return prev
-        return {
-          ...prev,
-          bookshelves: savedShelfName,
-          dateAdded: todayAddedFormatted,
-          'Date Added': todayAddedFormatted,
-          readAt: todayFormatted,
-          'Date Read': todayFormatted,
-          updatedAt: data.updatedAt || new Date().toISOString(),
-        }
-      })
-    } catch (err) {
-      console.error('Error saving book to shelf:', err)
-    } finally {
-      setIsSavingShelf(false)
-    }
-  }
-
-  const handleRateBook = async (newRating) => {
-    if (!selectedBook) return
-    const activeUser = cookieUserId || getUserIdFromCookie()
-    if (!isUserLoggedIn || !activeUser) {
-      closeBookDetails()
-      setShowProfileModal(true)
-      return
-    }
-
-    const bookId = String(selectedBook.bookId || selectedBook.id || loggedInUserBook?.bookId || '')
-    if (!bookId) return
-
-    const previousRating = currentBookRating
-
-    // Close the rating panel after clicking stars, while keeping the whole book modal window open
-    if (ratingCloseTimeoutRef.current) {
-      clearTimeout(ratingCloseTimeoutRef.current)
-    }
-    ratingCloseTimeoutRef.current = setTimeout(() => {
-      setShowRatingPopup(false)
-    }, 250)
-
-    // Optimistic update: update star rating immediately before receiving server confirmation
-    setTargetShelf('read')
-    setSavedShelf(true)
+    const data = await res.json()
+    const savedShelfName = data?.shelf || 'to-read'
     setUserShelvesByBookId((prev) => ({
       ...prev,
       [bookId]: {
         ...(prev[bookId] || {}),
         bookId,
-        shelf: 'read',
-        myRating: newRating,
+        shelf: savedShelfName,
+        title: book.title || '',
+        author: book.author || '',
+        isbn: book.isbn || '',
+        dateAdded: data?.dateAdded || '',
+      },
+    }))
+    syncSavedBookIntoLibrary(activeUserId, book, savedShelfName, data)
+  } catch (err) {
+    console.error('Error quick-adding book to to-read:', err)
+    setUserShelvesByBookId((prev) => {
+      const copy = { ...prev }
+      delete copy[bookId]
+      return copy
+    })
+  } finally {
+    setQuickAddingBookId(null)
+  }
+}
+
+const normalizeFeedBookItem = (b) =>
+  enrichBookWithCache({
+    ...b,
+    id: b.id || b.bookId,
+    bookId: b.bookId || b.id,
+    imageUrl: b.imageUrl || b.coverUrl,
+    coverUrl: b.coverUrl || b.imageUrl,
+  })
+
+const handleOpenFeedBook = (book, event = null) => {
+  if (!book) return
+  const normalizedBook = normalizeFeedBookItem(book)
+
+  const eventBooks = Array.isArray(event?.books) && event.books.length > 0
+    ? event.books
+    : [book]
+
+  if (event && (event.collection || eventBooks.length > 1)) {
+    const colId = event.collection?.collectionId || event.collection?.id || `feed-${event.id}`
+    setActiveModalCollection({
+      id: String(colId),
+      collectionId: String(colId),
+      userId: event.user?.userId || '',
+      title: event.collection?.title || '',
+      description: event.collection?.description || '',
+      books: eventBooks.map(normalizeFeedBookItem),
+    })
+  } else {
+    setActiveModalCollection(null)
+  }
+
+  setSelectedBook(normalizedBook)
+  setError('')
+}
+
+const handleSelectSearchBook = (book) => {
+  if (targetCollectionForSearch) {
+    handleAddBookToCollectionFromSearch(book)
+    return
+  }
+  setOpenedFromSearch(true)
+  setSelectedBook(enrichBookWithCache(book))
+}
+
+const handleHeaderClick = () => {
+  setIsExploreMode(true)
+  setActiveModalCollection(null)
+  setRequestedBookId('')
+  setSelectedBook(null)
+  setActiveAuthorFilter('all')
+
+  const ownId = isUserLoggedIn ? (cookieUserId || getUserIdFromCookie() || '') : ''
+  setCurrentUserId(ownId)
+  if (!ownId) {
+    setUsername('')
+    setBooks([])
+  }
+  window.history.pushState({}, '', '/')
+}
+
+const handleBackNavigation = () => {
+  setSelectedBook(null)
+  setActiveModalCollection(null)
+  setRequestedBookId('')
+
+  const hasInternalReferrer =
+    typeof document !== 'undefined' &&
+    Boolean(document.referrer && document.referrer.startsWith(window.location.origin))
+
+  const canGoBack = (inAppNavCountRef.current > 0 || hasInternalReferrer) && window.history.length > 1
+
+  if (canGoBack) {
+    window.history.back()
+  } else {
+    handleHeaderClick()
+  }
+}
+
+const handleSaveBookToShelf = async (shelfToSave = targetShelf) => {
+  if (!selectedBook) return
+  const activeUser = cookieUserId || getUserIdFromCookie()
+  if (!isUserLoggedIn || !activeUser) {
+    closeBookDetails()
+    setShowProfileModal(true)
+    return
+  }
+
+  const bookId = String(selectedBook.bookId || selectedBook.id || loggedInUserBook?.bookId || '')
+  if (!bookId) return
+
+  try {
+    setIsSavingShelf(true)
+    const response = await fetch('/api/shelves', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: activeUser,
+        bookId,
+        shelf: shelfToSave,
+        book: {
+          bookId,
+          title: selectedBook.title,
+          author: selectedBook.author,
+          isbn: selectedBook.isbn,
+          pages: selectedBook.pages,
+          publishedYear: selectedBook.publishedYear,
+          publisher: selectedBook.publisher,
+          binding: selectedBook.binding,
+          description: selectedBook.description,
+          mainCategory: selectedBook.mainCategory,
+          coverUrl: selectedBook.imageUrl || selectedBook.coverUrl,
+        },
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Failed to save book to shelf: status ${response.status}`)
+    }
+
+    const data = await response.json()
+    const savedShelfName = data.shelf || shelfToSave
+    setTargetShelf(savedShelfName)
+    setSavedShelf(true)
+    if (savedShelfName === 'read') {
+      setShowRatingPopup(true)
+    } else {
+      setShowRatingPopup(false)
+    }
+    const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '/')
+    const todayAddedFormatted = data.dateAdded || todayStr
+    const todayFormatted =
+      data.dateRead ||
+      (savedShelfName === 'read' ? todayStr : '')
+    setUserShelvesByBookId((prev) => {
+      const entry = {
+        ...(prev[bookId] || {}),
+        bookId,
+        shelf: savedShelfName,
         title: selectedBook.title,
         author: selectedBook.author,
         isbn: selectedBook.isbn,
-      },
-    }))
+        dateAdded: todayAddedFormatted,
+        dateRead: todayFormatted,
+      }
+      const next = {
+        ...prev,
+        [bookId]: entry,
+      }
+      if (selectedBook.id && String(selectedBook.id) !== bookId) {
+        next[String(selectedBook.id)] = entry
+      }
+      return next
+    })
+    syncSavedBookIntoLibrary(activeUser, selectedBook, savedShelfName, data)
+    setSelectedBook((prev) => {
+      if (!prev) return prev
+      const isMatch =
+        String(prev.bookId || '') === bookId ||
+        String(prev.id || '') === bookId ||
+        (selectedBook.id && String(prev.id) === String(selectedBook.id))
+      if (!isMatch) return prev
+      return {
+        ...prev,
+        bookshelves: savedShelfName,
+        dateAdded: todayAddedFormatted,
+        'Date Added': todayAddedFormatted,
+        readAt: todayFormatted,
+        'Date Read': todayFormatted,
+        updatedAt: data.updatedAt || new Date().toISOString(),
+      }
+    })
+  } catch (err) {
+    console.error('Error saving book to shelf:', err)
+  } finally {
+    setIsSavingShelf(false)
+  }
+}
 
-    setSelectedBook((prev) => (prev ? { ...prev, rating: newRating } : prev))
-    setBooks((prev) =>
-      prev.map((b) =>
-        String(b.bookId || b.id) === bookId ? { ...b, rating: newRating } : b
-      )
+const handleRateBook = async (newRating) => {
+  if (!selectedBook) return
+  const activeUser = cookieUserId || getUserIdFromCookie()
+  if (!isUserLoggedIn || !activeUser) {
+    closeBookDetails()
+    setShowProfileModal(true)
+    return
+  }
+
+  const bookId = String(selectedBook.bookId || selectedBook.id || loggedInUserBook?.bookId || '')
+  if (!bookId) return
+
+  const previousRating = currentBookRating
+
+  // Close the rating panel after clicking stars, while keeping the whole book modal window open
+  if (ratingCloseTimeoutRef.current) {
+    clearTimeout(ratingCloseTimeoutRef.current)
+  }
+  ratingCloseTimeoutRef.current = setTimeout(() => {
+    setShowRatingPopup(false)
+  }, 250)
+
+  // Optimistic update: update star rating immediately before receiving server confirmation
+  setTargetShelf('read')
+  setSavedShelf(true)
+  setUserShelvesByBookId((prev) => ({
+    ...prev,
+    [bookId]: {
+      ...(prev[bookId] || {}),
+      bookId,
+      shelf: 'read',
+      myRating: newRating,
+      title: selectedBook.title,
+      author: selectedBook.author,
+      isbn: selectedBook.isbn,
+    },
+  }))
+
+  setSelectedBook((prev) => (prev ? { ...prev, rating: newRating } : prev))
+  setBooks((prev) =>
+    prev.map((b) =>
+      String(b.bookId || b.id) === bookId ? { ...b, rating: newRating } : b
     )
+  )
 
-    if (activeModalCollection) {
-      setActiveModalCollection((prev) => {
-        if (!prev || !Array.isArray(prev.books)) return prev
-        return {
-          ...prev,
-          books: prev.books.map((b) =>
-            String(b.bookId || b.id) === bookId ? { ...b, rating: newRating } : b
-          ),
-        }
-      })
+  if (activeModalCollection) {
+    setActiveModalCollection((prev) => {
+      if (!prev || !Array.isArray(prev.books)) return prev
+      return {
+        ...prev,
+        books: prev.books.map((b) =>
+          String(b.bookId || b.id) === bookId ? { ...b, rating: newRating } : b
+        ),
+      }
+    })
+  }
+
+  const updateCollectionRating = (ratingVal) => (collections) =>
+    collections.map((c) => {
+      if (!c.books || !Array.isArray(c.books)) return c
+      const hasBook = c.books.some((b) => String(b.bookId || b.id) === bookId)
+      if (!hasBook) return c
+      return {
+        ...c,
+        books: c.books.map((b) =>
+          String(b.bookId || b.id) === bookId ? { ...b, rating: ratingVal } : b
+        ),
+      }
+    })
+
+  setUserCollections(updateCollectionRating(newRating))
+  setExploreCollections(updateCollectionRating(newRating))
+
+  try {
+    setIsSavingRating(true)
+    const response = await fetch('/api/shelves', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: activeUser,
+        bookId,
+        action: 'rate',
+        rating: newRating,
+        shelf: 'read',
+        book: {
+          bookId,
+          title: selectedBook.title,
+          author: selectedBook.author,
+          isbn: selectedBook.isbn,
+          pages: selectedBook.pages,
+          publishedYear: selectedBook.publishedYear,
+          publisher: selectedBook.publisher,
+          binding: selectedBook.binding,
+          description: selectedBook.description,
+          mainCategory: selectedBook.mainCategory,
+          coverUrl: selectedBook.imageUrl || selectedBook.coverUrl,
+        },
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Failed to save rating: status ${response.status}`)
     }
 
-    const updateCollectionRating = (ratingVal) => (collections) =>
-      collections.map((c) => {
-        if (!c.books || !Array.isArray(c.books)) return c
-        const hasBook = c.books.some((b) => String(b.bookId || b.id) === bookId)
-        if (!hasBook) return c
-        return {
-          ...c,
-          books: c.books.map((b) =>
-            String(b.bookId || b.id) === bookId ? { ...b, rating: ratingVal } : b
-          ),
-        }
-      })
+    const data = await response.json()
+    const savedRating = Number(data.myRating ?? newRating)
 
-    setUserCollections(updateCollectionRating(newRating))
-    setExploreCollections(updateCollectionRating(newRating))
-
-    try {
-      setIsSavingRating(true)
-      const response = await fetch('/api/shelves', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: activeUser,
-          bookId,
-          action: 'rate',
-          rating: newRating,
-          shelf: 'read',
-          book: {
-            bookId,
-            title: selectedBook.title,
-            author: selectedBook.author,
-            isbn: selectedBook.isbn,
-            pages: selectedBook.pages,
-            publishedYear: selectedBook.publishedYear,
-            publisher: selectedBook.publisher,
-            binding: selectedBook.binding,
-            description: selectedBook.description,
-            mainCategory: selectedBook.mainCategory,
-            coverUrl: selectedBook.imageUrl || selectedBook.coverUrl,
-          },
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error(`Failed to save rating: status ${response.status}`)
-      }
-
-      const data = await response.json()
-      const savedRating = Number(data.myRating ?? newRating)
-
-      // Sync confirmed rating from server if it differs
-      if (savedRating !== newRating) {
-        setUserShelvesByBookId((prev) => ({
-          ...prev,
-          [bookId]: {
-            ...(prev[bookId] || {}),
-            bookId,
-            shelf: 'read',
-            myRating: savedRating,
-            title: selectedBook.title,
-            author: selectedBook.author,
-            isbn: selectedBook.isbn,
-          },
-        }))
-        setSelectedBook((prev) => (prev ? { ...prev, rating: savedRating } : prev))
-        setBooks((prev) =>
-          prev.map((b) =>
-            String(b.bookId || b.id) === bookId ? { ...b, rating: savedRating } : b
-          )
-        )
-      }
-    } catch (err) {
-      console.error('Error saving book rating:', err)
-      // Rollback on failure
+    // Sync confirmed rating from server if it differs
+    if (savedRating !== newRating) {
       setUserShelvesByBookId((prev) => ({
         ...prev,
         [bookId]: {
           ...(prev[bookId] || {}),
           bookId,
-          myRating: previousRating,
+          shelf: 'read',
+          myRating: savedRating,
+          title: selectedBook.title,
+          author: selectedBook.author,
+          isbn: selectedBook.isbn,
         },
       }))
-      setSelectedBook((prev) => (prev ? { ...prev, rating: previousRating } : prev))
+      setSelectedBook((prev) => (prev ? { ...prev, rating: savedRating } : prev))
       setBooks((prev) =>
         prev.map((b) =>
-          String(b.bookId || b.id) === bookId ? { ...b, rating: previousRating } : b
+          String(b.bookId || b.id) === bookId ? { ...b, rating: savedRating } : b
         )
       )
-    } finally {
-      setIsSavingRating(false)
     }
+  } catch (err) {
+    console.error('Error saving book rating:', err)
+    // Rollback on failure
+    setUserShelvesByBookId((prev) => ({
+      ...prev,
+      [bookId]: {
+        ...(prev[bookId] || {}),
+        bookId,
+        myRating: previousRating,
+      },
+    }))
+    setSelectedBook((prev) => (prev ? { ...prev, rating: previousRating } : prev))
+    setBooks((prev) =>
+      prev.map((b) =>
+        String(b.bookId || b.id) === bookId ? { ...b, rating: previousRating } : b
+      )
+    )
+  } finally {
+    setIsSavingRating(false)
+  }
+}
+
+const handleRemoveBookFromShelf = async () => {
+  if (!selectedBook) return
+  const activeUser = cookieUserId || getUserIdFromCookie()
+  if (!isUserLoggedIn || !activeUser) {
+    closeBookDetails()
+    setShowProfileModal(true)
+    return
   }
 
-  const handleRemoveBookFromShelf = async () => {
-    if (!selectedBook) return
-    const activeUser = cookieUserId || getUserIdFromCookie()
-    if (!isUserLoggedIn || !activeUser) {
-      closeBookDetails()
-      setShowProfileModal(true)
-      return
+  const bookId = String(selectedBook.bookId || selectedBook.id || loggedInUserBook?.bookId || '')
+  if (!bookId) return
+
+  try {
+    setIsSavingShelf(true)
+    const response = await fetch('/api/shelves', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: activeUser,
+        bookId,
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Failed to remove book from shelf: status ${response.status}`)
     }
 
-    const bookId = String(selectedBook.bookId || selectedBook.id || loggedInUserBook?.bookId || '')
-    if (!bookId) return
+    setSavedShelf(false)
+    setShowRatingPopup(false)
+    setUserShelvesByBookId((prev) => {
+      const next = { ...prev }
+      delete next[bookId]
+      if (loggedInUserBook?.bookId) {
+        delete next[loggedInUserBook.bookId]
+      }
+      if (selectedBook.id) {
+        delete next[String(selectedBook.id)]
+      }
+      return next
+    })
+    setBooks((prevBooks) =>
+      prevBooks.filter(
+        (b) =>
+          String(b.bookId || '') !== bookId &&
+          String(b.id || '') !== bookId &&
+          !(selectedBook.id && String(b.id) === String(selectedBook.id))
+      )
+    )
+    setSelectedBook((prev) =>
+      prev &&
+        (String(prev.bookId || '') === bookId ||
+          String(prev.id || '') === bookId ||
+          (selectedBook.id && String(prev.id) === String(selectedBook.id)))
+        ? {
+          ...prev,
+          bookshelves: '',
+          readAt: '',
+          'Date Read': '',
+        }
+        : prev
+    )
+    if (cookieUserId) {
+      setBooksFetchTrigger((prev) => prev + 1)
+    }
+  } catch (err) {
+    console.error('Error removing book from shelf:', err)
+  } finally {
+    setIsSavingShelf(false)
+  }
+}
 
-    try {
-      setIsSavingShelf(true)
-      const response = await fetch('/api/shelves', {
+const showModalToast = (msg) => {
+  if (modalToastTimeoutRef.current) clearTimeout(modalToastTimeoutRef.current)
+  setModalToast(msg)
+  modalToastTimeoutRef.current = setTimeout(() => setModalToast(''), 2200)
+}
+
+const handleToggleBookInCollection = async (collectionSummary) => {
+  const activeUser = getActiveCollectionUserId()
+  if (!activeUser || !supabaseUser || !selectedBook || !collectionSummary?.id) return
+
+  const colId = String(collectionSummary.id)
+  const isCurrentlyIn = selectedBookCollectionIds.has(colId)
+  const bookId = String(selectedBook.bookId || selectedBook.id || '')
+  const cleanIsbn = String(selectedBook.isbn || selectedBook.isbn13 || '')
+    .replace(/[^0-9X]/gi, '')
+    .trim()
+
+  setCollectionActionInProgressId(colId)
+
+  // Optimistically update membership state
+  setSelectedBookCollectionIds((prev) => {
+    const next = new Set(prev)
+    if (isCurrentlyIn) {
+      next.delete(colId)
+    } else {
+      next.add(colId)
+    }
+    return next
+  })
+
+  try {
+    if (isCurrentlyIn) {
+      const response = await fetch('/api/collections', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: activeUser,
+          collectionId: colId,
           bookId,
+          isbn: cleanIsbn,
         }),
       })
 
       if (!response.ok) {
-        throw new Error(`Failed to remove book from shelf: status ${response.status}`)
+        throw new Error(`Failed to remove book: status ${response.status}`)
       }
 
-      setSavedShelf(false)
-      setShowRatingPopup(false)
-      setUserShelvesByBookId((prev) => {
-        const next = { ...prev }
-        delete next[bookId]
-        if (loggedInUserBook?.bookId) {
-          delete next[loggedInUserBook.bookId]
-        }
-        if (selectedBook.id) {
-          delete next[String(selectedBook.id)]
-        }
-        return next
-      })
-      setBooks((prevBooks) =>
-        prevBooks.filter(
-          (b) =>
-            String(b.bookId || '') !== bookId &&
-            String(b.id || '') !== bookId &&
-            !(selectedBook.id && String(b.id) === String(selectedBook.id))
-        )
-      )
-      setSelectedBook((prev) =>
-        prev &&
-          (String(prev.bookId || '') === bookId ||
-            String(prev.id || '') === bookId ||
-            (selectedBook.id && String(prev.id) === String(selectedBook.id)))
-          ? {
-            ...prev,
-            bookshelves: '',
-            readAt: '',
-            'Date Read': '',
+      const removeBookFn = (list) =>
+        list.map((c) => {
+          if (String(c.id) !== colId) return c
+          return {
+            ...c,
+            books: (c.books || []).filter(
+              (b) =>
+                String(b.bookId || b.id) !== bookId &&
+                (!cleanIsbn ||
+                  String(b.isbn || b.isbn13 || '').replace(/[^0-9X]/gi, '') !== cleanIsbn),
+            ),
           }
-          : prev
-      )
-      if (cookieUserId) {
-        setBooksFetchTrigger((prev) => prev + 1)
+        })
+
+      setUserCollections(removeBookFn)
+      setExploreCollections(removeBookFn)
+      showModalToast(`Eliminat din „${collectionSummary.title}”`)
+    } else {
+      const response = await fetch('/api/collections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'add-book',
+          userId: activeUser,
+          collectionId: colId,
+          bookId,
+          book: {
+            bookId,
+            title: selectedBook.title,
+            author: selectedBook.author,
+            isbn: selectedBook.isbn || selectedBook.isbn13,
+            pages: selectedBook.pages,
+            publishedYear: selectedBook.publishedYear,
+            publisher: selectedBook.publisher,
+            binding: selectedBook.binding,
+            description: selectedBook.description,
+            mainCategory: selectedBook.mainCategory,
+            coverUrl: selectedBook.imageUrl || selectedBook.coverUrl,
+          },
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to add book: status ${response.status}`)
       }
-    } catch (err) {
-      console.error('Error removing book from shelf:', err)
-    } finally {
-      setIsSavingShelf(false)
+
+      const normalizedAddedBook = normalizeCsvBook(selectedBook, 0)
+      const addBookFn = (list) =>
+        list.map((c) => {
+          if (String(c.id) !== colId) return c
+          const existingBooks = Array.isArray(c.books) ? c.books : []
+          if (existingBooks.some((b) => String(b.bookId || b.id) === bookId)) return c
+          return {
+            ...c,
+            books: [...existingBooks, normalizedAddedBook],
+          }
+        })
+
+      setUserCollections(addBookFn)
+      setExploreCollections(addBookFn)
+      showModalToast(`Adăugat în „${collectionSummary.title}”`)
     }
-  }
-
-  const showModalToast = (msg) => {
-    if (modalToastTimeoutRef.current) clearTimeout(modalToastTimeoutRef.current)
-    setModalToast(msg)
-    modalToastTimeoutRef.current = setTimeout(() => setModalToast(''), 2200)
-  }
-
-  const handleToggleBookInCollection = async (collectionSummary) => {
-    const activeUser = getActiveCollectionUserId()
-    if (!activeUser || !supabaseUser || !selectedBook || !collectionSummary?.id) return
-
-    const colId = String(collectionSummary.id)
-    const isCurrentlyIn = selectedBookCollectionIds.has(colId)
-    const bookId = String(selectedBook.bookId || selectedBook.id || '')
-    const cleanIsbn = String(selectedBook.isbn || selectedBook.isbn13 || '')
-      .replace(/[^0-9X]/gi, '')
-      .trim()
-
-    setCollectionActionInProgressId(colId)
-
-    // Optimistically update membership state
+  } catch (err) {
+    console.error('Error toggling book in collection:', err)
+    // Rollback optimistic update
     setSelectedBookCollectionIds((prev) => {
       const next = new Set(prev)
       if (isCurrentlyIn) {
-        next.delete(colId)
-      } else {
         next.add(colId)
+      } else {
+        next.delete(colId)
       }
       return next
     })
+    showModalToast('Eroare la actualizarea colecției.')
+  } finally {
+    setCollectionActionInProgressId(null)
+  }
+}
 
-    try {
-      if (isCurrentlyIn) {
-        const response = await fetch('/api/collections', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userId: activeUser,
-            collectionId: colId,
-            bookId,
-            isbn: cleanIsbn,
-          }),
-        })
+const handleJumpBook = (delta = 1, { saveToRead = false } = {}) => {
+  if (!modalBookList.length || !selectedBook) return
+  const curIdx = modalBookList.findIndex(
+    (b) => String(b.bookId || b.id) === String(selectedBook.bookId || selectedBook.id),
+  )
+  if (curIdx === -1) return
 
-        if (!response.ok) {
-          throw new Error(`Failed to remove book: status ${response.status}`)
-        }
+  const bookToSave = selectedBook
 
-        const removeBookFn = (list) =>
-          list.map((c) => {
-            if (String(c.id) !== colId) return c
-            return {
-              ...c,
-              books: (c.books || []).filter(
-                (b) =>
-                  String(b.bookId || b.id) !== bookId &&
-                  (!cleanIsbn ||
-                    String(b.isbn || b.isbn13 || '').replace(/[^0-9X]/gi, '') !== cleanIsbn),
-              ),
-            }
-          })
+  if (saveToRead) {
+    const activeUser = cookieUserId || getUserIdFromCookie()
+    if (!isUserLoggedIn || !activeUser) {
+      closeBookDetails()
+      setShowProfileModal(true)
+      return
+    }
 
-        setUserCollections(removeBookFn)
-        setExploreCollections(removeBookFn)
-        showModalToast(`Eliminat din „${collectionSummary.title}”`)
-      } else {
-        const response = await fetch('/api/collections', {
+    if (isSwipableModal) {
+      const bookId = String(bookToSave.bookId || bookToSave.id || '')
+      if (bookId) {
+        fetch('/api/shelves', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            action: 'add-book',
             userId: activeUser,
-            collectionId: colId,
             bookId,
+            shelf: 'to-read',
             book: {
               bookId,
-              title: selectedBook.title,
-              author: selectedBook.author,
-              isbn: selectedBook.isbn || selectedBook.isbn13,
-              pages: selectedBook.pages,
-              publishedYear: selectedBook.publishedYear,
-              publisher: selectedBook.publisher,
-              binding: selectedBook.binding,
-              description: selectedBook.description,
-              mainCategory: selectedBook.mainCategory,
-              coverUrl: selectedBook.imageUrl || selectedBook.coverUrl,
+              title: bookToSave.title,
+              author: bookToSave.author,
+              isbn: bookToSave.isbn,
+              pages: bookToSave.pages,
+              publishedYear: bookToSave.publishedYear,
+              publisher: bookToSave.publisher,
+              binding: bookToSave.binding,
+              description: bookToSave.description,
+              mainCategory: bookToSave.mainCategory,
+              coverUrl: bookToSave.imageUrl || bookToSave.coverUrl,
             },
           }),
         })
-
-        if (!response.ok) {
-          throw new Error(`Failed to add book: status ${response.status}`)
-        }
-
-        const normalizedAddedBook = normalizeCsvBook(selectedBook, 0)
-        const addBookFn = (list) =>
-          list.map((c) => {
-            if (String(c.id) !== colId) return c
-            const existingBooks = Array.isArray(c.books) ? c.books : []
-            if (existingBooks.some((b) => String(b.bookId || b.id) === bookId)) return c
-            return {
-              ...c,
-              books: [...existingBooks, normalizedAddedBook],
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            if (data) {
+              const savedShelfName = data.shelf || 'to-read'
+              setUserShelvesByBookId((prev) => ({
+                ...prev,
+                [bookId]: {
+                  ...(prev[bookId] || {}),
+                  bookId,
+                  shelf: savedShelfName,
+                  title: bookToSave.title,
+                  author: bookToSave.author,
+                  isbn: bookToSave.isbn,
+                  dateAdded: data.dateAdded || '',
+                },
+              }))
+              syncSavedBookIntoLibrary(activeUser, bookToSave, savedShelfName, data)
+              showModalToast('Salvat pe raftul De citit!')
             }
           })
-
-        setUserCollections(addBookFn)
-        setExploreCollections(addBookFn)
-        showModalToast(`Adăugat în „${collectionSummary.title}”`)
-      }
-    } catch (err) {
-      console.error('Error toggling book in collection:', err)
-      // Rollback optimistic update
-      setSelectedBookCollectionIds((prev) => {
-        const next = new Set(prev)
-        if (isCurrentlyIn) {
-          next.add(colId)
-        } else {
-          next.delete(colId)
-        }
-        return next
-      })
-      showModalToast('Eroare la actualizarea colecției.')
-    } finally {
-      setCollectionActionInProgressId(null)
-    }
-  }
-
-  const handleJumpBook = (delta = 1, { saveToRead = false } = {}) => {
-    if (!modalBookList.length || !selectedBook) return
-    const curIdx = modalBookList.findIndex(
-      (b) => String(b.bookId || b.id) === String(selectedBook.bookId || selectedBook.id),
-    )
-    if (curIdx === -1) return
-
-    const bookToSave = selectedBook
-
-    if (saveToRead) {
-      const activeUser = cookieUserId || getUserIdFromCookie()
-      if (!isUserLoggedIn || !activeUser) {
-        closeBookDetails()
-        setShowProfileModal(true)
-        return
-      }
-
-      if (isSwipableModal) {
-        const bookId = String(bookToSave.bookId || bookToSave.id || '')
-        if (bookId) {
-          fetch('/api/shelves', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              userId: activeUser,
-              bookId,
-              shelf: 'to-read',
-              book: {
-                bookId,
-                title: bookToSave.title,
-                author: bookToSave.author,
-                isbn: bookToSave.isbn,
-                pages: bookToSave.pages,
-                publishedYear: bookToSave.publishedYear,
-                publisher: bookToSave.publisher,
-                binding: bookToSave.binding,
-                description: bookToSave.description,
-                mainCategory: bookToSave.mainCategory,
-                coverUrl: bookToSave.imageUrl || bookToSave.coverUrl,
-              },
-            }),
+          .catch((err) => {
+            console.error('Error saving book on swipe right:', err)
           })
-            .then((res) => (res.ok ? res.json() : null))
-            .then((data) => {
-              if (data) {
-                const savedShelfName = data.shelf || 'to-read'
-                setUserShelvesByBookId((prev) => ({
-                  ...prev,
-                  [bookId]: {
-                    ...(prev[bookId] || {}),
-                    bookId,
-                    shelf: savedShelfName,
-                    title: bookToSave.title,
-                    author: bookToSave.author,
-                    isbn: bookToSave.isbn,
-                    dateAdded: data.dateAdded || '',
-                  },
-                }))
-                syncSavedBookIntoLibrary(activeUser, bookToSave, savedShelfName, data)
-                showModalToast('Salvat pe raftul De citit!')
-              }
-            })
-            .catch((err) => {
-              console.error('Error saving book on swipe right:', err)
-            })
-        }
       }
     }
-
-    const nextIndex = curIdx + delta
-    if (nextIndex >= modalBookList.length || nextIndex < 0) {
-      closeBookDetails()
-      return
-    }
-
-    const nextBook = modalBookList[nextIndex]
-    if (!nextBook) {
-      closeBookDetails()
-      return
-    }
-
-    const nextBookId = String(nextBook.bookId || nextBook.id)
-    if (!activeModalCollection) {
-      const nextShelf = nextBook.bookshelves || activeShelf
-      window.history.replaceState({}, '', `/${currentUserId}/${nextShelf}/${encodeURIComponent(nextBookId)}`)
-      setRequestedBookId(nextBookId)
-    }
-    setSelectedBook(enrichBookWithCache(nextBook))
-    setShelfDropdownOpen(false)
   }
 
-  // Preload and decode images for upcoming books so swiping feels instant with zero lag
-  useEffect(() => {
-    if (!selectedBook || !modalBookList || modalBookList.length === 0) return
+  const nextIndex = curIdx + delta
+  if (nextIndex >= modalBookList.length || nextIndex < 0) {
+    closeBookDetails()
+    return
+  }
 
-    const curIdx = modalBookList.findIndex(
-      (b) => String(b.bookId || b.id) === String(selectedBook.bookId || selectedBook.id)
-    )
-    if (curIdx === -1) return
+  const nextBook = modalBookList[nextIndex]
+  if (!nextBook) {
+    closeBookDetails()
+    return
+  }
 
-    // Preload next 3 books and previous 1 book
-    const indicesToPreload = [curIdx + 1, curIdx + 2, curIdx + 3, curIdx - 1]
-    const urls = indicesToPreload
-      .map((idx) => modalBookList[idx]?.imageUrl)
-      .filter((url) => Boolean(url && typeof url === 'string'))
+  const nextBookId = String(nextBook.bookId || nextBook.id)
+  if (!activeModalCollection) {
+    const nextShelf = nextBook.bookshelves || activeShelf
+    window.history.replaceState({}, '', `/${currentUserId}/${nextShelf}/${encodeURIComponent(nextBookId)}`)
+    setRequestedBookId(nextBookId)
+  }
+  setSelectedBook(enrichBookWithCache(nextBook))
+  setShelfDropdownOpen(false)
+}
 
-    urls.forEach((url) => {
-      const img = new Image()
-      img.src = url
-      if (typeof img.decode === 'function') {
-        img.decode().catch(() => {
-          // Ignore decode errors if unsupported or network fails
-        })
-      }
-    })
-  }, [selectedBook, modalBookList])
+// Preload and decode images for upcoming books so swiping feels instant with zero lag
+useEffect(() => {
+  if (!selectedBook || !modalBookList || modalBookList.length === 0) return
 
-  const handleTriggerModalSwipe = (direction) => {
-    if (modalSwipeExit || !selectedBook) return
+  const curIdx = modalBookList.findIndex(
+    (b) => String(b.bookId || b.id) === String(selectedBook.bookId || selectedBook.id)
+  )
+  if (curIdx === -1) return
 
-    if (direction === 'right') {
-      const activeUser = cookieUserId || getUserIdFromCookie()
-      if (!isUserLoggedIn || !activeUser) {
-        setModalDragOffset({ x: 0, y: 0 })
-        setModalSwipeExit(null)
-        closeBookDetails()
-        setShowProfileModal(true)
-        return
-      }
+  // Preload next 3 books and previous 1 book
+  const indicesToPreload = [curIdx + 1, curIdx + 2, curIdx + 3, curIdx - 1]
+  const urls = indicesToPreload
+    .map((idx) => modalBookList[idx]?.imageUrl)
+    .filter((url) => Boolean(url && typeof url === 'string'))
+
+  urls.forEach((url) => {
+    const img = new Image()
+    img.src = url
+    if (typeof img.decode === 'function') {
+      img.decode().catch(() => {
+        // Ignore decode errors if unsupported or network fails
+      })
     }
+  })
+}, [selectedBook, modalBookList])
 
-    setModalSwipeExit(direction)
+const handleTriggerModalSwipe = (direction) => {
+  if (modalSwipeExit || !selectedBook) return
 
-    const shouldSave = direction === 'right'
-
-    setTimeout(() => {
-      handleJumpBook(1, { saveToRead: shouldSave })
+  if (direction === 'right') {
+    const activeUser = cookieUserId || getUserIdFromCookie()
+    if (!isUserLoggedIn || !activeUser) {
       setModalDragOffset({ x: 0, y: 0 })
       setModalSwipeExit(null)
-      setIsModalEntering(true)
-      setTimeout(() => setIsModalEntering(false), 160)
-    }, 150)
-  }
-
-  const handleModalPointerDown = (event) => {
-    if (modalSwipeExit) return
-    if (event.button !== 0 && event.pointerType === 'mouse') return
-    if (event.target.closest('button, select, input, a, .book-shelf-options-menu, .book-detail-qr-box, .book-detail-actions-row, .book-detail-rating-section, .book-rating-popup, .book-rating-popup-wrapper, .qr-modal-overlay, .qr-modal-card, [role="radiogroup"], [role="radio"]')) return
-
-    modalPointerRef.current = {
-      startX: event.clientX,
-      startY: event.clientY,
-      startTime: Date.now(),
-      currentDx: 0,
-      currentDy: 0,
-      rafId: null,
-      isDragging: true,
-      directionLocked: null,
-    }
-
-    if (modalCardRef.current && typeof modalCardRef.current.setPointerCapture === 'function') {
-      try {
-        modalCardRef.current.setPointerCapture(event.pointerId)
-      } catch {
-        // Fallback
-      }
+      closeBookDetails()
+      setShowProfileModal(true)
+      return
     }
   }
 
-  const handleModalPointerMove = (event) => {
-    if (!modalPointerRef.current.isDragging || modalSwipeExit) return
-    const dx = event.clientX - modalPointerRef.current.startX
-    const dy = event.clientY - modalPointerRef.current.startY
+  setModalSwipeExit(direction)
 
-    if (!modalPointerRef.current.directionLocked) {
-      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
-        modalPointerRef.current.directionLocked = 'horizontal'
-      } else if (Math.abs(dy) > 8) {
-        modalPointerRef.current.directionLocked = 'vertical'
-      }
+  const shouldSave = direction === 'right'
+
+  setTimeout(() => {
+    handleJumpBook(1, { saveToRead: shouldSave })
+    setModalDragOffset({ x: 0, y: 0 })
+    setModalSwipeExit(null)
+    setIsModalEntering(true)
+    setTimeout(() => setIsModalEntering(false), 160)
+  }, 150)
+}
+
+const handleModalPointerDown = (event) => {
+  if (modalSwipeExit) return
+  if (event.button !== 0 && event.pointerType === 'mouse') return
+  if (event.target.closest('button, select, input, a, .book-shelf-options-menu, .book-detail-qr-box, .book-detail-actions-row, .book-detail-rating-section, .book-rating-popup, .book-rating-popup-wrapper, .qr-modal-overlay, .qr-modal-card, [role="radiogroup"], [role="radio"]')) return
+
+  modalPointerRef.current = {
+    startX: event.clientX,
+    startY: event.clientY,
+    startTime: Date.now(),
+    currentDx: 0,
+    currentDy: 0,
+    rafId: null,
+    isDragging: true,
+    directionLocked: null,
+  }
+
+  if (modalCardRef.current && typeof modalCardRef.current.setPointerCapture === 'function') {
+    try {
+      modalCardRef.current.setPointerCapture(event.pointerId)
+    } catch {
+      // Fallback
     }
+  }
+}
 
-    if (modalPointerRef.current.directionLocked === 'horizontal') {
-      modalPointerRef.current.currentDx = dx
-      modalPointerRef.current.currentDy = dy
+const handleModalPointerMove = (event) => {
+  if (!modalPointerRef.current.isDragging || modalSwipeExit) return
+  const dx = event.clientX - modalPointerRef.current.startX
+  const dy = event.clientY - modalPointerRef.current.startY
 
-      if (!modalPointerRef.current.rafId) {
-        modalPointerRef.current.rafId = requestAnimationFrame(() => {
-          modalPointerRef.current.rafId = null
-          if (modalPointerRef.current.isDragging) {
-            setModalDragOffset({
-              x: modalPointerRef.current.currentDx,
-              y: modalPointerRef.current.currentDy * 0.15,
-            })
-          }
-        })
-      }
+  if (!modalPointerRef.current.directionLocked) {
+    if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+      modalPointerRef.current.directionLocked = 'horizontal'
+    } else if (Math.abs(dy) > 8) {
+      modalPointerRef.current.directionLocked = 'vertical'
     }
   }
 
-  const handleModalPointerUp = (event) => {
-    if (!modalPointerRef.current.isDragging) return
-    modalPointerRef.current.isDragging = false
+  if (modalPointerRef.current.directionLocked === 'horizontal') {
+    modalPointerRef.current.currentDx = dx
+    modalPointerRef.current.currentDy = dy
 
-    if (modalPointerRef.current.rafId) {
-      cancelAnimationFrame(modalPointerRef.current.rafId)
-      modalPointerRef.current.rafId = null
+    if (!modalPointerRef.current.rafId) {
+      modalPointerRef.current.rafId = requestAnimationFrame(() => {
+        modalPointerRef.current.rafId = null
+        if (modalPointerRef.current.isDragging) {
+          setModalDragOffset({
+            x: modalPointerRef.current.currentDx,
+            y: modalPointerRef.current.currentDy * 0.15,
+          })
+        }
+      })
     }
+  }
+}
 
-    if (modalCardRef.current && typeof modalCardRef.current.releasePointerCapture === 'function') {
-      try {
-        modalCardRef.current.releasePointerCapture(event.pointerId)
-      } catch {
-        // Fallback
-      }
-    }
+const handleModalPointerUp = (event) => {
+  if (!modalPointerRef.current.isDragging) return
+  modalPointerRef.current.isDragging = false
 
-    if (modalPointerRef.current.directionLocked === 'horizontal') {
-      const dx = typeof modalPointerRef.current.currentDx === 'number'
-        ? modalPointerRef.current.currentDx
-        : modalDragOffset.x
-      const elapsed = Math.max(1, Date.now() - (modalPointerRef.current.startTime || Date.now()))
-      const velocity = Math.abs(dx) / elapsed
-      const isFlick = velocity > 0.35 && Math.abs(dx) > 35
-      const isLongDrag = Math.abs(dx) > 65
-
-      if ((isFlick && dx > 0) || (isLongDrag && dx > 0)) {
-        handleTriggerModalSwipe('right')
-      } else if ((isFlick && dx < 0) || (isLongDrag && dx < 0)) {
-        handleTriggerModalSwipe('left')
-      } else {
-        setModalDragOffset({ x: 0, y: 0 })
-      }
-    }
-
-    modalPointerRef.current.directionLocked = null
+  if (modalPointerRef.current.rafId) {
+    cancelAnimationFrame(modalPointerRef.current.rafId)
+    modalPointerRef.current.rafId = null
   }
 
-  useEffect(() => {
-    if (!selectedBook && !isSearchModalOpen && !showNewCollectionInput && !editingCollection && !showBookQrModal && !showProfileModal) return undefined
+  if (modalCardRef.current && typeof modalCardRef.current.releasePointerCapture === 'function') {
+    try {
+      modalCardRef.current.releasePointerCapture(event.pointerId)
+    } catch {
+      // Fallback
+    }
+  }
 
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        if (showBookQrModal) {
-          setShowBookQrModal(false)
-          return
-        }
-        if (showProfileModal) {
-          setShowProfileModal(false)
-          return
-        }
-        if (editingCollection) {
-          handleCloseEditCollection()
-          return
-        }
-        if (selectedBook) {
-          closeBookDetails()
-        } else if (isSearchModalOpen) {
-          setIsSearchModalOpen(false)
-          setTargetCollectionForSearch(null)
-        } else if (showNewCollectionInput) {
-          setShowNewCollectionInput(false)
-          setNewCollectionTitle('')
-          setNewCollectionDescription('')
-          setNewCollectionIsPrivate(false)
-          setNewCollectionError('')
-        }
+  if (modalPointerRef.current.directionLocked === 'horizontal') {
+    const dx = typeof modalPointerRef.current.currentDx === 'number'
+      ? modalPointerRef.current.currentDx
+      : modalDragOffset.x
+    const elapsed = Math.max(1, Date.now() - (modalPointerRef.current.startTime || Date.now()))
+    const velocity = Math.abs(dx) / elapsed
+    const isFlick = velocity > 0.35 && Math.abs(dx) > 35
+    const isLongDrag = Math.abs(dx) > 65
+
+    if ((isFlick && dx > 0) || (isLongDrag && dx > 0)) {
+      handleTriggerModalSwipe('right')
+    } else if ((isFlick && dx < 0) || (isLongDrag && dx < 0)) {
+      handleTriggerModalSwipe('left')
+    } else {
+      setModalDragOffset({ x: 0, y: 0 })
+    }
+  }
+
+  modalPointerRef.current.directionLocked = null
+}
+
+useEffect(() => {
+  if (!selectedBook && !isSearchModalOpen && !showNewCollectionInput && !editingCollection && !showBookQrModal && !showProfileModal) return undefined
+
+  const handleKeyDown = (event) => {
+    if (event.key === 'Escape') {
+      if (showBookQrModal) {
+        setShowBookQrModal(false)
         return
       }
-
-      if (!isSwipableModal || !selectedBook) return
-
-      if (event.key === 'ArrowRight') {
-        event.preventDefault()
-        handleTriggerModalSwipe('right')
-      } else if (event.key === 'ArrowLeft') {
-        event.preventDefault()
-        handleTriggerModalSwipe('left')
+      if (showProfileModal) {
+        setShowProfileModal(false)
+        return
       }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedBook, isSearchModalOpen, showNewCollectionInput, editingCollection, showBookQrModal, showProfileModal, isSwipableModal, modalBookList, modalSwipeExit, cookieUserId, currentUserId, supabaseUser, openedFromSearch, activeModalCollection])
-
-  const modalRotation = useMemo(() => {
-    if (modalSwipeExit === 'right') return 16
-    if (modalSwipeExit === 'left') return -16
-    return Math.max(-14, Math.min(14, modalDragOffset.x * 0.045))
-  }, [modalDragOffset.x, modalSwipeExit])
-
-  const modalRightStampOpacity = useMemo(() => {
-    if (modalSwipeExit === 'right') return 1
-    if (modalSwipeExit === 'left') return 0
-    return Math.max(0, Math.min(1, modalDragOffset.x / 60))
-  }, [modalDragOffset.x, modalSwipeExit])
-
-  const modalLeftStampOpacity = useMemo(() => {
-    if (modalSwipeExit === 'left') return 1
-    if (modalSwipeExit === 'right') return 0
-    return Math.max(0, Math.min(1, -modalDragOffset.x / 60))
-  }, [modalDragOffset.x, modalSwipeExit])
-
-  const shouldShowCarouselNavigation = Boolean(currentUserId || username)
-
-  const handleCsvFileChange = (event) => {
-    const file = event.target.files?.[0] || null
-    setCsvFile(file)
-    setUploadError('')
-  }
-
-  const handleUploadCsvSubmit = async (event) => {
-    event.preventDefault()
-
-    if (!csvFile) {
-      setUploadError('Selectează fișierul CSV exportat din Goodreads.')
+      if (editingCollection) {
+        handleCloseEditCollection()
+        return
+      }
+      if (selectedBook) {
+        closeBookDetails()
+      } else if (isSearchModalOpen) {
+        setIsSearchModalOpen(false)
+        setTargetCollectionForSearch(null)
+      } else if (showNewCollectionInput) {
+        setShowNewCollectionInput(false)
+        setNewCollectionTitle('')
+        setNewCollectionDescription('')
+        setNewCollectionIsPrivate(false)
+        setNewCollectionError('')
+      }
       return
     }
 
-    const trimmedName = displayNameInput.trim()
+    if (!isSwipableModal || !selectedBook) return
 
-    try {
-      setIsUploadingCsv(true)
-      setUploadError('')
-      setError('')
+    if (event.key === 'ArrowRight') {
+      event.preventDefault()
+      handleTriggerModalSwipe('right')
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault()
+      handleTriggerModalSwipe('left')
+    }
+  }
 
-      const csvText = await csvFile.text()
-      const existingCookieUserId = getUserIdFromCookie() || cookieUserId
-      const isExistingUser = Boolean(existingCookieUserId)
+  window.addEventListener('keydown', handleKeyDown)
+  return () => window.removeEventListener('keydown', handleKeyDown)
+}, [selectedBook, isSearchModalOpen, showNewCollectionInput, editingCollection, showBookQrModal, showProfileModal, isSwipableModal, modalBookList, modalSwipeExit, cookieUserId, currentUserId, supabaseUser, openedFromSearch, activeModalCollection])
 
-      const response = await fetch('/api/uploadcsv', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          displayName: trimmedName || undefined,
-          description: descriptionInput.slice(0, 140).trim(),
-          csv: csvText,
-          userId: existingCookieUserId || currentUserId,
-          authUserId: supabaseUser?.id || null,
-        }),
-        credentials: 'include',
+const modalRotation = useMemo(() => {
+  if (modalSwipeExit === 'right') return 16
+  if (modalSwipeExit === 'left') return -16
+  return Math.max(-14, Math.min(14, modalDragOffset.x * 0.045))
+}, [modalDragOffset.x, modalSwipeExit])
+
+const modalRightStampOpacity = useMemo(() => {
+  if (modalSwipeExit === 'right') return 1
+  if (modalSwipeExit === 'left') return 0
+  return Math.max(0, Math.min(1, modalDragOffset.x / 60))
+}, [modalDragOffset.x, modalSwipeExit])
+
+const modalLeftStampOpacity = useMemo(() => {
+  if (modalSwipeExit === 'left') return 1
+  if (modalSwipeExit === 'right') return 0
+  return Math.max(0, Math.min(1, -modalDragOffset.x / 60))
+}, [modalDragOffset.x, modalSwipeExit])
+
+const shouldShowCarouselNavigation = Boolean(currentUserId || username)
+
+const handleCsvFileChange = (event) => {
+  const file = event.target.files?.[0] || null
+  setCsvFile(file)
+  setUploadError('')
+}
+
+const handleUploadCsvSubmit = async (event) => {
+  event.preventDefault()
+
+  if (!csvFile) {
+    setUploadError('Selectează fișierul CSV exportat din Goodreads.')
+    return
+  }
+
+  const trimmedName = displayNameInput.trim()
+
+  try {
+    setIsUploadingCsv(true)
+    setUploadError('')
+    setError('')
+
+    const csvText = await csvFile.text()
+    const existingCookieUserId = getUserIdFromCookie() || cookieUserId
+    const isExistingUser = Boolean(existingCookieUserId)
+
+    const response = await fetch('/api/uploadcsv', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        displayName: trimmedName || undefined,
+        description: descriptionInput.slice(0, 140).trim(),
+        csv: csvText,
+        userId: existingCookieUserId || currentUserId,
+        authUserId: supabaseUser?.id || null,
+      }),
+      credentials: 'include',
+    })
+
+    if (!response.ok) {
+      throw new Error(`Upload CSV failed with status ${response.status}`)
+    }
+
+    const contentType = response.headers.get('content-type') || ''
+    let data = null
+    if (contentType.includes('application/json')) {
+      data = await response.json()
+    } else {
+      const text = (await response.text()).trim()
+      if (text) {
+        try {
+          data = JSON.parse(text)
+        } catch {
+          data = { userId: text }
+        }
+      }
+    }
+
+    const nextUserId = data?.userId || data?.id || data?.slug || ''
+    const nextUrl =
+      data?.url ||
+      (nextUserId
+        ? `${window.location.origin}/${nextUserId}`
+        : `${window.location.origin}/${encodeURIComponent(trimmedName)}`)
+
+    if (nextUserId) {
+      setUserIdCookie(nextUserId)
+      setCookieUserId(String(nextUserId))
+      const nextPath = `/${nextUserId}`
+      window.history.pushState({}, '', nextPath)
+      setCurrentUserId(String(nextUserId))
+    }
+
+    if (data?.username || trimmedName) {
+      setUsername(data?.username || trimmedName)
+    }
+
+    if (Array.isArray(data?.books)) {
+      setBooks(data.books.map((book, index) => normalizeCsvBook(book, index)))
+    }
+
+    setGeneratedProfileUrl(nextUrl)
+
+    QRCode.toDataURL(nextUrl)
+      .then((dataUrl) => setQrCodeDataUrl(dataUrl))
+      .catch((qrError) => {
+        console.error(qrError)
+        setQrCodeDataUrl('')
       })
 
-      if (!response.ok) {
-        throw new Error(`Upload CSV failed with status ${response.status}`)
-      }
-
-      const contentType = response.headers.get('content-type') || ''
-      let data = null
-      if (contentType.includes('application/json')) {
-        data = await response.json()
+    if (isExistingUser) {
+      setShowProfileModal(false)
+      setCsvFile(null)
+      if (window.location.pathname === '/' || window.location.pathname === '') {
+        window.location.href = `/${nextUserId}`
       } else {
-        const text = (await response.text()).trim()
-        if (text) {
-          try {
-            data = JSON.parse(text)
-          } catch {
-            data = { userId: text }
-          }
-        }
+        window.location.reload()
       }
-
-      const nextUserId = data?.userId || data?.id || data?.slug || ''
-      const nextUrl =
-        data?.url ||
-        (nextUserId
-          ? `${window.location.origin}/${nextUserId}`
-          : `${window.location.origin}/${encodeURIComponent(trimmedName)}`)
-
-      if (nextUserId) {
-        setUserIdCookie(nextUserId)
-        setCookieUserId(String(nextUserId))
-        const nextPath = `/${nextUserId}`
-        window.history.pushState({}, '', nextPath)
-        setCurrentUserId(String(nextUserId))
-      }
-
-      if (data?.username || trimmedName) {
-        setUsername(data?.username || trimmedName)
-      }
-
-      if (Array.isArray(data?.books)) {
-        setBooks(data.books.map((book, index) => normalizeCsvBook(book, index)))
-      }
-
-      setGeneratedProfileUrl(nextUrl)
-
-      QRCode.toDataURL(nextUrl)
-        .then((dataUrl) => setQrCodeDataUrl(dataUrl))
-        .catch((qrError) => {
-          console.error(qrError)
-          setQrCodeDataUrl('')
-        })
-
-      if (isExistingUser) {
-        setShowProfileModal(false)
-        setCsvFile(null)
-        if (window.location.pathname === '/' || window.location.pathname === '') {
-          window.location.href = `/${nextUserId}`
-        } else {
-          window.location.reload()
-        }
-        return
-      }
-    } catch (submitError) {
-      console.error(submitError)
-      setUploadError('Nu am putut încărca fișierul CSV. Încearcă din nou.')
-    } finally {
-      setIsUploadingCsv(false)
+      return
     }
+  } catch (submitError) {
+    console.error(submitError)
+    setUploadError('Nu am putut încărca fișierul CSV. Încearcă din nou.')
+  } finally {
+    setIsUploadingCsv(false)
+  }
+}
+
+const handleCopyGeneratedUrl = async () => {
+  if (!generatedProfileUrl) {
+    return
   }
 
-  const handleCopyGeneratedUrl = async () => {
-    if (!generatedProfileUrl) {
+  try {
+    await navigator.clipboard.writeText(generatedProfileUrl)
+    setCopiedUrl(true)
+    setTimeout(() => setCopiedUrl(false), 2000)
+  } catch (copyError) {
+    console.error(copyError)
+  }
+}
+
+const handleShareGeneratedUrl = async () => {
+  if (!generatedProfileUrl) {
+    return
+  }
+
+  const shareTitle = displayNameInput ? `Librăria lui ${displayNameInput}` : 'Ce mai citim'
+  const shareText = displayNameInput
+    ? `Vezi cărțile citite de ${displayNameInput} pe Ce mai citim!`
+    : 'Vezi librăria pe Ce mai citim!'
+
+  try {
+    if (navigator.share) {
+      await navigator.share({
+        title: shareTitle,
+        text: shareText,
+        url: generatedProfileUrl,
+      })
+      setSharedUrl(true)
+      setTimeout(() => setSharedUrl(false), 2000)
       return
     }
 
+    await navigator.clipboard.writeText(generatedProfileUrl)
+    setCopiedUrl(true)
+    setTimeout(() => setCopiedUrl(false), 2000)
+  } catch (shareError) {
+    if (shareError?.name === 'AbortError') {
+      return
+    }
+    console.error(shareError)
     try {
       await navigator.clipboard.writeText(generatedProfileUrl)
       setCopiedUrl(true)
@@ -4331,1290 +4380,1197 @@ function App() {
       console.error(copyError)
     }
   }
+}
 
-  const handleShareGeneratedUrl = async () => {
-    if (!generatedProfileUrl) {
-      return
+const handleOpenProfileModal = () => {
+  const activeCookieId = cookieUserId || getUserIdFromCookie()
+  const userFallbackName =
+    supabaseUser?.user_metadata?.full_name ||
+    supabaseUser?.user_metadata?.display_name ||
+    supabaseUser?.email?.split('@')[0] ||
+    ''
+
+  if (activeCookieId) {
+    if (!cookieUserId) {
+      setCookieUserId(activeCookieId)
     }
-
-    const shareTitle = displayNameInput ? `Librăria lui ${displayNameInput}` : 'Ce mai citim'
-    const shareText = displayNameInput
-      ? `Vezi cărțile citite de ${displayNameInput} pe Ce mai citim!`
-      : 'Vezi librăria pe Ce mai citim!'
-
-    try {
-      if (navigator.share) {
-        await navigator.share({
-          title: shareTitle,
-          text: shareText,
-          url: generatedProfileUrl,
-        })
-        setSharedUrl(true)
-        setTimeout(() => setSharedUrl(false), 2000)
-        return
-      }
-
-      await navigator.clipboard.writeText(generatedProfileUrl)
-      setCopiedUrl(true)
-      setTimeout(() => setCopiedUrl(false), 2000)
-    } catch (shareError) {
-      if (shareError?.name === 'AbortError') {
-        return
-      }
-      console.error(shareError)
-      try {
-        await navigator.clipboard.writeText(generatedProfileUrl)
-        setCopiedUrl(true)
-        setTimeout(() => setCopiedUrl(false), 2000)
-      } catch (copyError) {
-        console.error(copyError)
-      }
+    const prefillName = displayNameInput || userFallbackName || ''
+    if (prefillName) {
+      setDisplayNameInput(prefillName)
     }
+    const profileUrl = `${window.location.origin}/${activeCookieId}`
+    setGeneratedProfileUrl(profileUrl)
+    QRCode.toDataURL(profileUrl)
+      .then((dataUrl) => setQrCodeDataUrl(dataUrl))
+      .catch((qrError) => {
+        console.error(qrError)
+        setQrCodeDataUrl('')
+      })
+  } else if (userFallbackName && !displayNameInput) {
+    setDisplayNameInput(userFallbackName)
+  }
+  if (userDescription && !descriptionInput) {
+    setDescriptionInput(userDescription)
+  }
+  setUploadError('')
+  setShowProfileModal(true)
+}
+
+const scrollBooks = (direction) => {
+  if (!carouselRef.current) {
+    return
   }
 
-  const handleOpenProfileModal = () => {
-    const activeCookieId = cookieUserId || getUserIdFromCookie()
-    const userFallbackName =
-      supabaseUser?.user_metadata?.full_name ||
-      supabaseUser?.user_metadata?.display_name ||
-      supabaseUser?.email?.split('@')[0] ||
-      ''
+  const firstCard = carouselRef.current.querySelector('.book-card')
 
-    if (activeCookieId) {
-      if (!cookieUserId) {
-        setCookieUserId(activeCookieId)
-      }
-      const prefillName = displayNameInput || userFallbackName || ''
-      if (prefillName) {
-        setDisplayNameInput(prefillName)
-      }
-      const profileUrl = `${window.location.origin}/${activeCookieId}`
-      setGeneratedProfileUrl(profileUrl)
-      QRCode.toDataURL(profileUrl)
-        .then((dataUrl) => setQrCodeDataUrl(dataUrl))
-        .catch((qrError) => {
-          console.error(qrError)
-          setQrCodeDataUrl('')
-        })
-    } else if (userFallbackName && !displayNameInput) {
-      setDisplayNameInput(userFallbackName)
-    }
-    if (userDescription && !descriptionInput) {
-      setDescriptionInput(userDescription)
-    }
-    setUploadError('')
-    setShowProfileModal(true)
+  if (!firstCard) {
+    return
   }
 
-  const scrollBooks = (direction) => {
-    if (!carouselRef.current) {
-      return
-    }
+  const carouselStyles = window.getComputedStyle(carouselRef.current)
+  const gap = Number.parseFloat(carouselStyles.columnGap || carouselStyles.gap || '12') || 12
+  const cardWidth = firstCard.getBoundingClientRect().width
 
-    const firstCard = carouselRef.current.querySelector('.book-card')
+  carouselRef.current.scrollBy({
+    left: direction * (cardWidth + gap),
+    behavior: 'smooth',
+  })
+}
 
-    if (!firstCard) {
-      return
-    }
-
-    const carouselStyles = window.getComputedStyle(carouselRef.current)
-    const gap = Number.parseFloat(carouselStyles.columnGap || carouselStyles.gap || '12') || 12
-    const cardWidth = firstCard.getBoundingClientRect().width
-
-    carouselRef.current.scrollBy({
-      left: direction * (cardWidth + gap),
-      behavior: 'smooth',
-    })
+const handlePointerDown = (event) => {
+  pointerDragRef.current = {
+    startX: event.clientX,
+    startY: event.clientY,
+    hasMoved: false,
   }
 
-  const handlePointerDown = (event) => {
-    pointerDragRef.current = {
-      startX: event.clientX,
-      startY: event.clientY,
-      hasMoved: false,
-    }
-
-    if (!carouselRef.current || event.pointerType === 'touch') {
-      return
-    }
-
-    const interactiveTarget = event.target.closest('button, a, input, textarea, select')
-    if (interactiveTarget) {
-      return
-    }
-
-    dragState.current = {
-      isDown: true,
-      active: false,
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      scrollLeft: carouselRef.current.scrollLeft,
-    }
+  if (!carouselRef.current || event.pointerType === 'touch') {
+    return
   }
 
-  const handlePointerMove = (event) => {
-    if (!dragState.current.isDown || event.pointerType === 'touch') {
-      return
-    }
-
-    const deltaX = event.clientX - dragState.current.startX
-    const deltaY = event.clientY - dragState.current.startY
-
-    if (!dragState.current.active) {
-      if (Math.hypot(deltaX, deltaY) > 6) {
-        dragState.current.active = true
-        pointerDragRef.current.hasMoved = true
-        if (typeof event.currentTarget?.setPointerCapture === 'function') {
-          try {
-            event.currentTarget.setPointerCapture(event.pointerId)
-          } catch {
-            // ignore
-          }
-        }
-      }
-    }
-
-    if (!dragState.current.active || !carouselRef.current) {
-      return
-    }
-
-    event.preventDefault()
-    carouselRef.current.scrollLeft = dragState.current.scrollLeft - deltaX
-    syncBookCoverFocus()
+  const interactiveTarget = event.target.closest('button, a, input, textarea, select')
+  if (interactiveTarget) {
+    return
   }
 
-  const handlePointerUp = (event) => {
-    if (dragState.current.active && typeof event.currentTarget?.hasPointerCapture === 'function') {
-      if (typeof event.pointerId === 'number' && event.currentTarget.hasPointerCapture(event.pointerId)) {
+  dragState.current = {
+    isDown: true,
+    active: false,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    scrollLeft: carouselRef.current.scrollLeft,
+  }
+}
+
+const handlePointerMove = (event) => {
+  if (!dragState.current.isDown || event.pointerType === 'touch') {
+    return
+  }
+
+  const deltaX = event.clientX - dragState.current.startX
+  const deltaY = event.clientY - dragState.current.startY
+
+  if (!dragState.current.active) {
+    if (Math.hypot(deltaX, deltaY) > 6) {
+      dragState.current.active = true
+      pointerDragRef.current.hasMoved = true
+      if (typeof event.currentTarget?.setPointerCapture === 'function') {
         try {
-          event.currentTarget.releasePointerCapture(event.pointerId)
+          event.currentTarget.setPointerCapture(event.pointerId)
         } catch {
           // ignore
         }
       }
     }
+  }
 
-    dragState.current = {
-      isDown: false,
-      active: false,
-      pointerId: null,
-      startX: 0,
-      startY: 0,
-      scrollLeft: 0,
+  if (!dragState.current.active || !carouselRef.current) {
+    return
+  }
+
+  event.preventDefault()
+  carouselRef.current.scrollLeft = dragState.current.scrollLeft - deltaX
+  syncBookCoverFocus()
+}
+
+const handlePointerUp = (event) => {
+  if (dragState.current.active && typeof event.currentTarget?.hasPointerCapture === 'function') {
+    if (typeof event.pointerId === 'number' && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      } catch {
+        // ignore
+      }
     }
   }
 
-  const handleBookTap = (book, event) => {
-    if (dragState.current.active || pointerDragRef.current.hasMoved) {
-      return
-    }
-    if (event?.defaultPrevented || event?.target?.closest('.glide-select, .book-controls')) {
-      return
-    }
-    openBookDetails(book)
+  dragState.current = {
+    isDown: false,
+    active: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    scrollLeft: 0,
+  }
+}
+
+const handleBookTap = (book, event) => {
+  if (dragState.current.active || pointerDragRef.current.hasMoved) {
+    return
+  }
+  if (event?.defaultPrevented || event?.target?.closest('.glide-select, .book-controls')) {
+    return
+  }
+  openBookDetails(book)
+}
+
+const syncBookCoverFocus = () => {
+  if (!carouselRef.current) {
+    return
   }
 
-  const syncBookCoverFocus = () => {
+  if (rafIdRef.current) {
+    return
+  }
+
+  rafIdRef.current = requestAnimationFrame(() => {
+    rafIdRef.current = null
     if (!carouselRef.current) {
       return
     }
 
-    if (rafIdRef.current) {
+    const carousel = carouselRef.current
+    const carouselRect = carousel.getBoundingClientRect()
+    if (carouselRect.width <= 0) {
       return
     }
 
-    rafIdRef.current = requestAnimationFrame(() => {
-      rafIdRef.current = null
-      if (!carouselRef.current) {
-        return
-      }
+    const carouselCenter = carouselRect.left + carouselRect.width / 2
+    const maxDistance = carouselRect.width * 0.72
+    const minBound = carouselRect.left - 200
+    const maxBound = carouselRect.right + 200
+    const cards = carousel.querySelectorAll('.book-card')
 
-      const carousel = carouselRef.current
-      const carouselRect = carousel.getBoundingClientRect()
-      if (carouselRect.width <= 0) {
-        return
-      }
+    // Phase 1: Pure reads - calculate transform values using robust viewport coordinates
+    const updates = []
 
-      const carouselCenter = carouselRect.left + carouselRect.width / 2
-      const maxDistance = carouselRect.width * 0.72
-      const minBound = carouselRect.left - 200
-      const maxBound = carouselRect.right + 200
-      const cards = carousel.querySelectorAll('.book-card')
+    for (let i = 0; i < cards.length; i += 1) {
+      const card = cards[i]
+      const cardRect = card.getBoundingClientRect()
 
-      // Phase 1: Pure reads - calculate transform values using robust viewport coordinates
-      const updates = []
-
-      for (let i = 0; i < cards.length; i += 1) {
-        const card = cards[i]
-        const cardRect = card.getBoundingClientRect()
-
-        // If card is outside the active focus zone, clear custom property if it had one
-        if (cardRect.right < minBound || cardRect.left > maxBound) {
-          if (card.dataset.customized === '1') {
-            card.style.removeProperty('--card-scale')
-            card.style.removeProperty('--card-translate-y')
-            card.style.removeProperty('--card-opacity')
-            delete card.dataset.customized
-          }
-          continue
+      // If card is outside the active focus zone, clear custom property if it had one
+      if (cardRect.right < minBound || cardRect.left > maxBound) {
+        if (card.dataset.customized === '1') {
+          card.style.removeProperty('--card-scale')
+          card.style.removeProperty('--card-translate-y')
+          card.style.removeProperty('--card-opacity')
+          delete card.dataset.customized
         }
-
-        const cardCenter = cardRect.left + cardRect.width / 2
-        const distanceFromCenter = Math.abs(cardCenter - carouselCenter)
-        const ratio = Math.max(0, 1 - distanceFromCenter / maxDistance)
-        const scale = (0.85 + ratio * 0.28).toFixed(3)
-        const translateY = `${((1 - ratio) * 14).toFixed(1)}px`
-        const opacity = (0.75 + ratio * 0.25).toFixed(3)
-
-        updates.push({ card, scale, translateY, opacity })
+        continue
       }
 
-      // Phase 2: Batch writes
-      for (let i = 0; i < updates.length; i += 1) {
-        const { card, scale, translateY, opacity } = updates[i]
-        card.style.setProperty('--card-scale', scale)
-        card.style.setProperty('--card-translate-y', translateY)
-        card.style.setProperty('--card-opacity', opacity)
-        card.dataset.customized = '1'
-      }
-    })
-  }
+      const cardCenter = cardRect.left + cardRect.width / 2
+      const distanceFromCenter = Math.abs(cardCenter - carouselCenter)
+      const ratio = Math.max(0, 1 - distanceFromCenter / maxDistance)
+      const scale = (0.85 + ratio * 0.28).toFixed(3)
+      const translateY = `${((1 - ratio) * 14).toFixed(1)}px`
+      const opacity = (0.75 + ratio * 0.25).toFixed(3)
 
-  useEffect(() => {
-    if (!carouselRef.current || visibleBooks.length === 0 || isExploreMode || activeShelf === 'collections') {
-      return undefined
+      updates.push({ card, scale, translateY, opacity })
     }
 
-    const carousel = carouselRef.current
+    // Phase 2: Batch writes
+    for (let i = 0; i < updates.length; i += 1) {
+      const { card, scale, translateY, opacity } = updates[i]
+      card.style.setProperty('--card-scale', scale)
+      card.style.setProperty('--card-translate-y', translateY)
+      card.style.setProperty('--card-opacity', opacity)
+      card.dataset.customized = '1'
+    }
+  })
+}
+
+useEffect(() => {
+  if (!carouselRef.current || visibleBooks.length === 0 || isExploreMode || activeShelf === 'collections') {
+    return undefined
+  }
+
+  const carousel = carouselRef.current
+  syncBookCoverFocus()
+
+  const handleScroll = () => {
+    lastScrollTimeRef.current = Date.now()
+    if (dragState.current.active) {
+      pointerDragRef.current.hasMoved = true
+    }
     syncBookCoverFocus()
-
-    const handleScroll = () => {
-      lastScrollTimeRef.current = Date.now()
-      if (dragState.current.active) {
-        pointerDragRef.current.hasMoved = true
-      }
-      syncBookCoverFocus()
-    }
-
-    const handleCarouselResize = () => {
-      syncBookCoverFocus()
-    }
-
-    carousel.addEventListener('scroll', handleScroll, { passive: true })
-    window.addEventListener('resize', handleCarouselResize)
-
-    let resizeObserver
-    if (typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(() => {
-        syncBookCoverFocus()
-      })
-      resizeObserver.observe(carousel)
-    }
-
-    return () => {
-      carousel.removeEventListener('scroll', handleScroll)
-      window.removeEventListener('resize', handleCarouselResize)
-      if (resizeObserver) {
-        resizeObserver.disconnect()
-      }
-      if (rafIdRef.current) {
-        cancelAnimationFrame(rafIdRef.current)
-        rafIdRef.current = null
-      }
-    }
-  }, [isLoading, isExploreMode, visibleBooks, activeShelf, activeAuthorFilter, activeBookSort])
-
-  const profileUserHeaderName =
-    displayNameInput.trim() ||
-    username ||
-    supabaseUser?.user_metadata?.full_name ||
-    supabaseUser?.user_metadata?.name ||
-    supabaseUser?.user_metadata?.display_name ||
-    supabaseUser?.email?.split('@')[0] ||
-    ''
-
-  const loggedInUserName =
-    (!isVisitingOtherUser && (displayNameInput.trim() || username)) ||
-    (!isVisitingOtherUser && supabaseUser?.user_metadata?.full_name) ||
-    (!isVisitingOtherUser && supabaseUser?.user_metadata?.name) ||
-    (!isVisitingOtherUser && supabaseUser?.user_metadata?.display_name) ||
-    ''
-
-  if (isAdminRoute) {
-    if (isCheckingAuth || isVerifyingAdmin) {
-      return (
-        <div
-          style={{
-            minHeight: '100vh',
-            background: '#0b0a0f',
-            color: '#a1a1aa',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 10,
-          }}
-        >
-          <Loader2 size={20} className="animate-spin" />
-          <span>Se verifică accesul...</span>
-        </div>
-      )
-    }
-
-    if (isAdminUser && supabaseUser) {
-      return (
-        <Suspense
-          fallback={
-            <div
-              style={{
-                minHeight: '100vh',
-                background: '#0b0a0f',
-                color: '#a1a1aa',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 10,
-              }}
-            >
-              <Loader2 size={20} className="animate-spin" />
-              <span>Se încarcă panoul de administrare...</span>
-            </div>
-          }
-        >
-          <AdminPage
-            adminEmail={supabaseUser.email || ''}
-            getAccessToken={getSupabaseAccessToken}
-            onBackToApp={handleExitAdminPage}
-          />
-        </Suspense>
-      )
-    }
   }
 
-  return (
-    <div style={{ position: 'relative', minHeight: '100vh', width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
-      <main className="app-shell" style={{ position: 'relative', zIndex: 1, maxWidth: '100%' }}>
-        <header className="library-header">
+  const handleCarouselResize = () => {
+    syncBookCoverFocus()
+  }
+
+  carousel.addEventListener('scroll', handleScroll, { passive: true })
+  window.addEventListener('resize', handleCarouselResize)
+
+  let resizeObserver
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => {
+      syncBookCoverFocus()
+    })
+    resizeObserver.observe(carousel)
+  }
+
+  return () => {
+    carousel.removeEventListener('scroll', handleScroll)
+    window.removeEventListener('resize', handleCarouselResize)
+    if (resizeObserver) {
+      resizeObserver.disconnect()
+    }
+    if (rafIdRef.current) {
+      cancelAnimationFrame(rafIdRef.current)
+      rafIdRef.current = null
+    }
+  }
+}, [isLoading, isExploreMode, visibleBooks, activeShelf, activeAuthorFilter, activeBookSort])
+
+const profileUserHeaderName =
+  displayNameInput.trim() ||
+  username ||
+  supabaseUser?.user_metadata?.full_name ||
+  supabaseUser?.user_metadata?.name ||
+  supabaseUser?.user_metadata?.display_name ||
+  supabaseUser?.email?.split('@')[0] ||
+  ''
+
+const loggedInUserName =
+  (!isVisitingOtherUser && (displayNameInput.trim() || username)) ||
+  (!isVisitingOtherUser && supabaseUser?.user_metadata?.full_name) ||
+  (!isVisitingOtherUser && supabaseUser?.user_metadata?.name) ||
+  (!isVisitingOtherUser && supabaseUser?.user_metadata?.display_name) ||
+  ''
+
+if (isAdminRoute) {
+  if (isCheckingAuth || isVerifyingAdmin) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          background: '#0b0a0f',
+          color: '#a1a1aa',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 10,
+        }}
+      >
+        <Loader2 size={20} className="animate-spin" />
+        <span>Se verifică accesul...</span>
+      </div>
+    )
+  }
+
+  if (isAdminUser && supabaseUser) {
+    return (
+      <Suspense
+        fallback={
           <div
-            className="library-header-row"
-            onClick={handleHeaderClick}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                handleHeaderClick()
-              }
+            style={{
+              minHeight: '100vh',
+              background: '#0b0a0f',
+              color: '#a1a1aa',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 10,
             }}
-            role="button"
-            tabIndex={0}
-            title="Mergi la pagina principală"
           >
-            {!isCheckingAuth && isVisitingOtherUser && username ? (
-              <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
-                Ce mai citim · <span className="text-violet-300">{username}</span>
-              </h1>
-            ) : !isCheckingAuth && !isVisitingOtherUser && isUserLoggedIn && loggedInUserName ? (
-              <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
-                Ce mai citim · <span className="text-violet-300">{loggedInUserName}</span>
-              </h1>
-            ) : (
-              <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
-                Ce mai citim
-              </h1>
-            )}
+            <Loader2 size={20} className="animate-spin" />
+            <span>Se încarcă panoul de administrare...</span>
           </div>
+        }
+      >
+        <AdminPage
+          adminEmail={supabaseUser.email || ''}
+          getAccessToken={getSupabaseAccessToken}
+          onBackToApp={handleExitAdminPage}
+        />
+      </Suspense>
+    )
+  }
+}
 
-          {loggedInUserName && yearlySummary.count > 5 && yearlySummary.totalPages > 0 ? (
-            <div className="reading-summary book-detail-label" aria-live="polite">
-              <span>{yearlySummary.count} cărți citite în 2026</span>
-              <span>· {yearlySummary.totalPages.toLocaleString()} pagini</span>
-            </div>
-          ) : null}
+return (
+  <div style={{ position: 'relative', minHeight: '100vh', width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
+    <main className="app-shell" style={{ position: 'relative', zIndex: 1, maxWidth: '100%' }}>
+      <header className="library-header">
+        <div
+          className="library-header-row"
+          onClick={handleHeaderClick}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              handleHeaderClick()
+            }
+          }}
+          role="button"
+          tabIndex={0}
+          title="Mergi la pagina principală"
+        >
+          {!isCheckingAuth && isVisitingOtherUser && username ? (
+            <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
+              Bibliotecă <span className="text-violet-300">{username}</span>
+            </h1>
+          ) : !isCheckingAuth && !isVisitingOtherUser && isUserLoggedIn && loggedInUserName ? (
+            <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
+              Ce mai citim
+            </h1>
+          ) : (
+            <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
+              Ce mai citim
+            </h1>
+          )}
+        </div>
 
-          <div className="shelf-pills" aria-label="Book shelves">
-            <RubberSegment
-              key="top-nav-segment"
-              pad={14}
-              items={visibleTopNavOptions.map((item) => {
-                const isLocked = !isVisitingOtherUser && !isUserLoggedIn && (item.id === 'shelves' || item.id === 'collections')
-                return {
-                  value: item.id,
-                  label: isLocked ? (
-                    <span className="inline-flex items-center gap-1">
-                      <span>{item.label}</span>
-                      <Lock size={12} strokeWidth={2.2} className="top-nav-lock-icon" />
-                    </span>
-                  ) : (
-                    item.label
-                  ),
-                  icon: item.icon,
-                }
-              })}
-              value={isExploreMode ? 'explore' : activeShelf === 'collections' ? 'collections' : 'shelves'}
-              onChange={(value) => {
-                const item = visibleTopNavOptions.find((opt) => opt.id === value)
-                if (!item) return
-                setSelectedBook(null)
-                setActiveModalCollection(null)
-                setRequestedBookId('')
-
-                if (item.id === 'explore') {
-                  setIsExploreMode(true)
-                  const ownId = isUserLoggedIn ? (cookieUserId || getUserIdFromCookie() || '') : ''
-                  setCurrentUserId(ownId)
-                  if (!ownId) {
-                    setUsername('')
-                  }
-                  window.history.pushState({}, '', '/')
-                  return
-                }
-
-                if (!isVisitingOtherUser && !isUserLoggedIn) {
-                  setTimeout(() => {
-                    setShowProfileModal(true)
-                  }, 0)
-                  return
-                }
-
-                // If currently in explore feed, switch to own library if available; otherwise require login
-                const targetUser = isVisitingOtherUser
-                  ? currentUserId
-                  : (getActiveCollectionUserId() || cookieUserId || getUserIdFromCookie() || currentUserId)
-
-                if (!targetUser) {
-                  setTimeout(() => {
-                    setShowProfileModal(true)
-                  }, 0)
-                  return
-                }
-
-                setIsExploreMode(false)
-                if (String(targetUser) !== String(currentUserId)) {
-                  setCurrentUserId(String(targetUser))
-                }
-
-                if (item.id === 'collections') {
-                  setActiveShelf('collections')
-                  window.history.pushState({}, '', `/${targetUser}/collections`)
-                  return
-                }
-
-                const targetShelf =
-                  activeShelf === 'collections' ? lastBookShelfRef.current || 'read' : activeShelf
-                setActiveShelf(targetShelf)
-                window.history.pushState({}, '', `/${targetUser}/${targetShelf}`)
-
-                setIsShelfReady(false)
-                if (!booksByUserIdCacheRef.current.has(String(targetUser))) {
-                  setIsLoading(true)
-                } else {
-                  setTimeout(() => {
-                    setIsShelfReady(true)
-                  }, 80)
-                }
-              }}
-              trackColor="rgba(38, 35, 46, 0.76)"
-              thumbColor="#8b5cf6"
-              textColor="#f4f4f5"
-              activeTextColor="#ffffff"
-              size="lg"
-              radius={12}
-              inset={3}
-              stretch={30}
-              squash={1}
-              speed={1.6}
-              glide={30}
-              draggable
-            />
-            {currentUserId && !isExploreMode && activeShelf !== 'collections' ? (
-              <JellyRadio
-                items={SHELF_OPTIONS.map((shelf) => ({
-                  value: shelf.id,
-                  label: `${shelf.label} (${shelfCounts[shelf.id] ?? 0})`,
-                }))}
-                value={activeShelf}
-                onChange={(value) => {
-                  const shelf = SHELF_OPTIONS.find((s) => s.id === value)
-                  if (!shelf) return
-                  setIsExploreMode(false)
-                  setActiveModalCollection(null)
-                  setActiveShelf(shelf.id)
-                  const nextPath = currentUserId ? `/${currentUserId}/${shelf.id}` : `/${shelf.id}`
-                  window.history.pushState({}, '', nextPath)
-                  setRequestedBookId('')
-                  setSelectedBook(null)
-                }}
-                chipColor="rgba(38, 35, 46, 0.76)"
-                activeColor="rgba(255, 255, 255, 0.14)"
-                textColor="#f4f4f5"
-                activeTextColor="#ffffff"
-                size="sm"
-                gap={0}
-                radius={18}
-                swell={0.2}
-                barge={0}
-                shrink={0.05}
-                jelly={1}
-                bounce={0.25}
-                stagger={22}
-                stiffness={580}
-                ariaLabel="Rafturi de cărți"
-              />
-            ) : currentUserId && !isExploreMode && activeShelf === 'collections' ? (
-              <JellyRadio
-                items={visibleCollectionFilterOptions.map((opt) => ({
-                  value: opt.id,
-                  label: `${opt.label} (${collectionCounts[opt.id] ?? 0})`,
-                }))}
-                value={!isOwnProfile && activeCollectionFilter === 'private' ? 'all' : activeCollectionFilter}
-                onChange={(value) => setActiveCollectionFilter(value)}
-                chipColor="rgba(38, 35, 46, 0.76)"
-                activeColor="rgba(255, 255, 255, 0.14)"
-                textColor="#f4f4f5"
-                activeTextColor="#ffffff"
-                size="sm"
-                gap={8}
-                radius={18}
-                swell={0.2}
-                barge={6}
-                shrink={0.05}
-                jelly={1}
-                bounce={0.25}
-                stagger={22}
-                stiffness={580}
-                ariaLabel="Filtru colecții"
-              />
-            ) : null}
+        {loggedInUserName && yearlySummary.count > 5 && yearlySummary.totalPages > 0 ? (
+          <div className="reading-summary book-detail-label" aria-live="polite">
+            <span>{yearlySummary.count} cărți citite în 2026</span>
+            <span>· {yearlySummary.totalPages.toLocaleString()} pagini</span>
           </div>
+        ) : null}
 
-        </header>
+        <div className="shelf-pills" aria-label="Book shelves">
+          <RubberSegment
+            key="top-nav-segment"
+            pad={14}
+            items={visibleTopNavOptions.map((item) => {
+              const isLocked = !isVisitingOtherUser && !isUserLoggedIn && (item.id === 'shelves' || item.id === 'collections')
+              return {
+                value: item.id,
+                label: isLocked ? (
+                  <span className="inline-flex items-center gap-1">
+                    <span>{item.label}</span>
+                    <Lock size={12} strokeWidth={2.2} className="top-nav-lock-icon" />
+                  </span>
+                ) : (
+                  item.label
+                ),
+                icon: item.icon,
+              }
+            })}
+            value={isExploreMode ? 'explore' : activeShelf === 'collections' ? 'collections' : 'shelves'}
+            onChange={(value) => {
+              const item = visibleTopNavOptions.find((opt) => opt.id === value)
+              if (!item) return
+              setSelectedBook(null)
+              setActiveModalCollection(null)
+              setRequestedBookId('')
 
-        {selectedBook ? (
-          <div
-            className="book-detail-backdrop"
-            onClick={(event) => {
-              if (event.target !== event.currentTarget) return
-              if (showBookQrModal) {
-                setShowBookQrModal(false)
+              if (item.id === 'explore') {
+                setIsExploreMode(true)
+                const ownId = isUserLoggedIn ? (cookieUserId || getUserIdFromCookie() || '') : ''
+                setCurrentUserId(ownId)
+                if (!ownId) {
+                  setUsername('')
+                }
+                window.history.pushState({}, '', '/')
                 return
               }
-              closeBookDetails()
-            }}
-          >
-            <div
-              ref={isSwipableModal ? modalCardRef : undefined}
-              className={`book-detail-modal ${showBookQrModal ? 'qr-modal-open' : ''} ${isSwipableModal
-                ? `swipable ${modalPointerRef.current?.isDragging ? 'is-dragging' : ''} ${modalSwipeExit ? `modal-fly-out-${modalSwipeExit}` : ''} ${isModalEntering ? 'modal-entering' : ''}`
-                : ''
-                }`}
-              style={
-                isSwipableModal
-                  ? {
-                    transform: modalSwipeExit || isModalEntering
-                      ? undefined
-                      : `translate3d(${modalDragOffset.x}px, ${modalDragOffset.y}px, 0) rotate(${modalRotation}deg)`,
-                    transition: modalPointerRef.current?.isDragging || isModalEntering
-                      ? 'none'
-                      : 'transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1)',
-                  }
-                  : undefined
+
+              if (!isVisitingOtherUser && !isUserLoggedIn) {
+                setTimeout(() => {
+                  setShowProfileModal(true)
+                }, 0)
+                return
               }
-              onPointerDown={isSwipableModal ? handleModalPointerDown : undefined}
-              onPointerMove={isSwipableModal ? handleModalPointerMove : undefined}
-              onPointerUp={isSwipableModal ? handleModalPointerUp : undefined}
-              onPointerCancel={isSwipableModal ? handleModalPointerUp : undefined}
-              onClick={(event) => event.stopPropagation()}
-            >
-              {/* In-Modal Non-Fullscreen QR Code Overlay */}
-              {showBookQrModal && bookQrCodeDataUrl ? (
+
+              // If currently in explore feed, switch to own library if available; otherwise require login
+              const targetUser = isVisitingOtherUser
+                ? currentUserId
+                : (getActiveCollectionUserId() || cookieUserId || getUserIdFromCookie() || currentUserId)
+
+              if (!targetUser) {
+                setTimeout(() => {
+                  setShowProfileModal(true)
+                }, 0)
+                return
+              }
+
+              setIsExploreMode(false)
+              if (String(targetUser) !== String(currentUserId)) {
+                setCurrentUserId(String(targetUser))
+              }
+
+              if (item.id === 'collections') {
+                setActiveShelf('collections')
+                window.history.pushState({}, '', `/${targetUser}/collections`)
+                return
+              }
+
+              const targetShelf =
+                activeShelf === 'collections' ? lastBookShelfRef.current || 'read' : activeShelf
+              setActiveShelf(targetShelf)
+              window.history.pushState({}, '', `/${targetUser}/${targetShelf}`)
+
+              setIsShelfReady(false)
+              if (!booksByUserIdCacheRef.current.has(String(targetUser))) {
+                setIsLoading(true)
+              } else {
+                setTimeout(() => {
+                  setIsShelfReady(true)
+                }, 80)
+              }
+            }}
+            trackColor="rgba(38, 35, 46, 0.76)"
+            thumbColor="#8b5cf6"
+            textColor="#f4f4f5"
+            activeTextColor="#ffffff"
+            size="lg"
+            radius={12}
+            inset={3}
+            stretch={30}
+            squash={1}
+            speed={1.6}
+            glide={30}
+            draggable
+          />
+          {currentUserId && !isExploreMode && activeShelf !== 'collections' ? (
+            <JellyRadio
+              items={SHELF_OPTIONS.map((shelf) => ({
+                value: shelf.id,
+                label: `${shelf.label} (${shelfCounts[shelf.id] ?? 0})`,
+              }))}
+              value={activeShelf}
+              onChange={(value) => {
+                const shelf = SHELF_OPTIONS.find((s) => s.id === value)
+                if (!shelf) return
+                setIsExploreMode(false)
+                setActiveModalCollection(null)
+                setActiveShelf(shelf.id)
+                const nextPath = currentUserId ? `/${currentUserId}/${shelf.id}` : `/${shelf.id}`
+                window.history.pushState({}, '', nextPath)
+                setRequestedBookId('')
+                setSelectedBook(null)
+              }}
+              chipColor="rgba(38, 35, 46, 0.76)"
+              activeColor="rgba(255, 255, 255, 0.14)"
+              textColor="#f4f4f5"
+              activeTextColor="#ffffff"
+              size="sm"
+              gap={0}
+              radius={18}
+              swell={0.2}
+              barge={0}
+              shrink={0.05}
+              jelly={1}
+              bounce={0.25}
+              stagger={22}
+              stiffness={580}
+              ariaLabel="Rafturi de cărți"
+            />
+          ) : currentUserId && !isExploreMode && activeShelf === 'collections' ? (
+            <JellyRadio
+              items={visibleCollectionFilterOptions.map((opt) => ({
+                value: opt.id,
+                label: `${opt.label} (${collectionCounts[opt.id] ?? 0})`,
+              }))}
+              value={!isOwnProfile && activeCollectionFilter === 'private' ? 'all' : activeCollectionFilter}
+              onChange={(value) => setActiveCollectionFilter(value)}
+              chipColor="rgba(38, 35, 46, 0.76)"
+              activeColor="rgba(255, 255, 255, 0.14)"
+              textColor="#f4f4f5"
+              activeTextColor="#ffffff"
+              size="sm"
+              gap={8}
+              radius={18}
+              swell={0.2}
+              barge={6}
+              shrink={0.05}
+              jelly={1}
+              bounce={0.25}
+              stagger={22}
+              stiffness={580}
+              ariaLabel="Filtru colecții"
+            />
+          ) : null}
+        </div>
+
+      </header>
+
+      {selectedBook ? (
+        <div
+          className="book-detail-backdrop"
+          onClick={(event) => {
+            if (event.target !== event.currentTarget) return
+            if (showBookQrModal) {
+              setShowBookQrModal(false)
+              return
+            }
+            closeBookDetails()
+          }}
+        >
+          <div
+            ref={isSwipableModal ? modalCardRef : undefined}
+            className={`book-detail-modal ${showBookQrModal ? 'qr-modal-open' : ''} ${isSwipableModal
+              ? `swipable ${modalPointerRef.current?.isDragging ? 'is-dragging' : ''} ${modalSwipeExit ? `modal-fly-out-${modalSwipeExit}` : ''} ${isModalEntering ? 'modal-entering' : ''}`
+              : ''
+              }`}
+            style={
+              isSwipableModal
+                ? {
+                  transform: modalSwipeExit || isModalEntering
+                    ? undefined
+                    : `translate3d(${modalDragOffset.x}px, ${modalDragOffset.y}px, 0) rotate(${modalRotation}deg)`,
+                  transition: modalPointerRef.current?.isDragging || isModalEntering
+                    ? 'none'
+                    : 'transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1)',
+                }
+                : undefined
+            }
+            onPointerDown={isSwipableModal ? handleModalPointerDown : undefined}
+            onPointerMove={isSwipableModal ? handleModalPointerMove : undefined}
+            onPointerUp={isSwipableModal ? handleModalPointerUp : undefined}
+            onPointerCancel={isSwipableModal ? handleModalPointerUp : undefined}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {/* In-Modal Non-Fullscreen QR Code Overlay */}
+            {showBookQrModal && bookQrCodeDataUrl ? (
+              <div
+                className="qr-modal-overlay"
+                onClick={() => setShowBookQrModal(false)}
+                role="dialog"
+                aria-modal="true"
+                aria-label="Cod QR"
+              >
                 <div
-                  className="qr-modal-overlay"
-                  onClick={() => setShowBookQrModal(false)}
-                  role="dialog"
-                  aria-modal="true"
-                  aria-label="Cod QR"
+                  className="qr-modal-card"
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  <div
-                    className="qr-modal-card"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <img
-                      src={bookQrCodeDataUrl}
-                      alt={`Cod QR ${selectedBook?.title || ''}`}
-                      className="qr-modal-image"
-                    />
+                  <img
+                    src={bookQrCodeDataUrl}
+                    alt={`Cod QR ${selectedBook?.title || ''}`}
+                    className="qr-modal-image"
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {/* Swipe Left & Right Overlay Stamps (Other user's books or collections) */}
+            {isSwipableModal && (
+              <>
+                <div
+                  className="book-modal-stamp book-modal-stamp-right"
+                  style={{ opacity: modalRightStampOpacity }}
+                  aria-hidden="true"
+                >
+                  <Bookmark size={18} strokeWidth={2.8} />
+                  <span>SALVEAZĂ</span>
+                </div>
+
+                <div
+                  className="book-modal-stamp book-modal-stamp-left"
+                  style={{ opacity: modalLeftStampOpacity }}
+                  aria-hidden="true"
+                >
+                  <X size={20} strokeWidth={3} />
+                  <span>SARI</span>
+                </div>
+
+                {/* Toast Feedback */}
+                {modalToast && (
+                  <div className="book-modal-toast" role="status" aria-live="polite">
+                    <Check size={14} />
+                    <span>{modalToast}</span>
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="book-detail-header">
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={closeBookDetails}
+                aria-label="Închide detaliile cărții"
+                title="Închide"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="book-detail-content">
+              <div className="book-detail-top-section">
+                <div className="book-detail-cover-col">
+                  <div className="book-detail-cover">
+                    <BookCover3D
+                      thickness={selectedBook.thickness || (selectedBook.pages ? Math.min(Math.max(Math.round(selectedBook.pages / 8), 18), 80) : 24)}
+                    >
+                      <div className="book-cover-art">
+                        {selectedBook.imageUrl ? (
+                          <img
+                            src={selectedBook.imageUrl}
+                            alt={`${selectedBook.title} cover`}
+                            loading="eager"
+                            decoding="async"
+                            className="loaded"
+                            onError={(e) => {
+                              e.currentTarget.style.display = 'none'
+                            }}
+                          />
+                        ) : null}
+                        <div className="book-cover-placeholder" aria-hidden="true" />
+                      </div>
+                    </BookCover3D>
                   </div>
                 </div>
-              ) : null}
 
-              {/* Swipe Left & Right Overlay Stamps (Other user's books or collections) */}
-              {isSwipableModal && (
-                <>
-                  <div
-                    className="book-modal-stamp book-modal-stamp-right"
-                    style={{ opacity: modalRightStampOpacity }}
-                    aria-hidden="true"
-                  >
-                    <Bookmark size={18} strokeWidth={2.8} />
-                    <span>SALVEAZĂ</span>
-                  </div>
-
-                  <div
-                    className="book-modal-stamp book-modal-stamp-left"
-                    style={{ opacity: modalLeftStampOpacity }}
-                    aria-hidden="true"
-                  >
-                    <X size={20} strokeWidth={3} />
-                    <span>SARI</span>
-                  </div>
-
-                  {/* Toast Feedback */}
-                  {modalToast && (
-                    <div className="book-modal-toast" role="status" aria-live="polite">
-                      <Check size={14} />
-                      <span>{modalToast}</span>
+                <div className="book-detail-meta-col">
+                  <div className="book-detail-meta-metrics">
+                    <div className="book-detail-metric">
+                      <span className="book-detail-label">Pagini</span>
+                      <strong>{selectedBook.pages ? selectedBook.pages.toLocaleString() : 'N/A'}</strong>
                     </div>
-                  )}
-                </>
-              )}
-
-              <div className="book-detail-header">
-                <button
-                  type="button"
-                  className="modal-close-btn"
-                  onClick={closeBookDetails}
-                  aria-label="Închide detaliile cărții"
-                  title="Închide"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              <div className="book-detail-content">
-                <div className="book-detail-top-section">
-                  <div className="book-detail-cover-col">
-                    <div className="book-detail-cover">
-                      <BookCover3D
-                        thickness={selectedBook.thickness || (selectedBook.pages ? Math.min(Math.max(Math.round(selectedBook.pages / 8), 18), 80) : 24)}
-                      >
-                        <div className="book-cover-art">
-                          {selectedBook.imageUrl ? (
-                            <img
-                              src={selectedBook.imageUrl}
-                              alt={`${selectedBook.title} cover`}
-                              loading="eager"
-                              decoding="async"
-                              className="loaded"
-                              onError={(e) => {
-                                e.currentTarget.style.display = 'none'
-                              }}
-                            />
-                          ) : null}
-                          <div className="book-cover-placeholder" aria-hidden="true" />
-                        </div>
-                      </BookCover3D>
+                    <div className="book-detail-metric">
+                      <span className="book-detail-label">An</span>
+                      <strong>{selectedBook.publishedYear || 'N/A'}</strong>
                     </div>
                   </div>
 
-                  <div className="book-detail-meta-col">
-                    <div className="book-detail-meta-metrics">
-                      <div className="book-detail-metric">
-                        <span className="book-detail-label">Pagini</span>
-                        <strong>{selectedBook.pages ? selectedBook.pages.toLocaleString() : 'N/A'}</strong>
-                      </div>
-                      <div className="book-detail-metric">
-                        <span className="book-detail-label">An</span>
-                        <strong>{selectedBook.publishedYear || 'N/A'}</strong>
-                      </div>
-                    </div>
-
-                    <div className="book-detail-actions-row">
-                      {bookQrCodeDataUrl ? (
-                        <button
-                          type="button"
-                          className="book-detail-action-button"
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            setShowBookQrModal(true)
-                          }}
-                          aria-label="Afișează codul QR"
-                          title="Cod QR"
-                        >
-                          <QrCode size={18} />
-                        </button>
-                      ) : null}
+                  <div className="book-detail-actions-row">
+                    {bookQrCodeDataUrl ? (
                       <button
                         type="button"
                         className="book-detail-action-button"
                         onPointerDown={(event) => event.stopPropagation()}
                         onClick={(event) => {
                           event.stopPropagation()
-                          shareBookLink(selectedBook)
+                          setShowBookQrModal(true)
                         }}
-                        aria-label={copiedUrl ? 'Link copiat!' : `Distribuie ${selectedBook.title}`}
-                        title={copiedUrl ? 'Link copiat!' : 'Distribuie'}
+                        aria-label="Afișează codul QR"
+                        title="Cod QR"
                       >
-                        {copiedUrl ? <Check size={18} /> : <Share2 size={18} />}
+                        <QrCode size={18} />
                       </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Row 1 across both columns: Shelf action */}
-                <div className="book-detail-shelf-action" ref={shelfDropdownRef}>
-                  {!supabaseUser ? (
+                    ) : null}
                     <button
                       type="button"
-                      className="book-shelf-login-prompt-btn"
-                      onClick={() => {
-                        closeBookDetails()
-                        setShowProfileModal(true)
+                      className="book-detail-action-button"
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        shareBookLink(selectedBook)
                       }}
+                      aria-label={copiedUrl ? 'Link copiat!' : `Distribuie ${selectedBook.title}`}
+                      title={copiedUrl ? 'Link copiat!' : 'Distribuie'}
                     >
-                      <Bookmark size={15} />
-                      <span>Login to save</span>
+                      {copiedUrl ? <Check size={18} /> : <Share2 size={18} />}
                     </button>
-                  ) : (
-                    <div className="book-detail-shelf-action-row">
-                      <div className="book-shelf-dropdown-wrapper">
-                        <button
-                          type="button"
-                          className={`book-shelf-select-btn ${savedShelf ? 'saved' : ''} ${shelfDropdownOpen ? 'open' : ''}`}
-                          disabled={isSavingShelf}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setShelfDropdownOpen((prev) => !prev)
-                          }}
-                          aria-haspopup="listbox"
-                          aria-expanded={shelfDropdownOpen}
-                          title={savedShelf ? `Raft curent: ${getShelfLabel(targetShelf)}. Deschide pentru a schimba raftul` : 'Alege raftul'}
-                        >
-                          <span className="book-shelf-btn-content">
-                            {savedShelf ? <Check size={16} /> : <Bookmark size={16} />}
-                            <span>
-                              {isSavingShelf
-                                ? 'Se salvează...'
-                                : (savedShelf ? getShelfLabel(targetShelf) : 'Alege raftul')}
-                            </span>
-                          </span>
-                          <ChevronDown size={16} className={`chevron-icon ${shelfDropdownOpen ? 'open' : ''}`} />
-                        </button>
-
-                        {shelfDropdownOpen && (
-                          <div className="book-shelf-options-menu" onClick={(e) => e.stopPropagation()}>
-                            {SHELF_OPTIONS.map((shelf) => (
-                              <button
-                                key={shelf.id}
-                                type="button"
-                                className={`book-shelf-option-item ${targetShelf === shelf.id && savedShelf ? 'active' : ''}`}
-                                onClick={() => {
-                                  setShelfDropdownOpen(false)
-                                  if (!savedShelf || targetShelf !== shelf.id) {
-                                    setTargetShelf(shelf.id)
-                                    handleSaveBookToShelf(shelf.id)
-                                  }
-                                }}
-                              >
-                                <span>{shelf.label}</span>
-                                {targetShelf === shelf.id && savedShelf && <Check size={14} />}
-                              </button>
-                            ))}
-                            {savedShelf && (
-                              <>
-                                <div className="book-shelf-menu-divider" />
-                                <button
-                                  type="button"
-                                  className="book-shelf-option-item book-shelf-option-remove"
-                                  onClick={() => {
-                                    setShelfDropdownOpen(false)
-                                    handleRemoveBookFromShelf()
-                                  }}
-                                >
-                                  <Trash2 size={14} />
-                                  <span>Elimină de pe raft</span>
-                                </button>
-                              </>
-                            )}
-                            {userCollectionSummaries.length > 0 && (
-                              <>
-                                <div className="book-shelf-menu-divider" />
-                                <div className="book-shelf-menu-section-title">Colecții</div>
-                                {userCollectionSummaries.map((col) => {
-                                  const colId = String(col.id)
-                                  const inCol = selectedBookCollectionIds.has(colId)
-                                  const isBusy = collectionActionInProgressId === colId
-                                  return (
-                                    <button
-                                      key={col.id}
-                                      type="button"
-                                      className={`book-shelf-option-item book-shelf-option-collection ${inCol ? 'active' : ''}`}
-                                      disabled={isBusy}
-                                      onClick={(e) => {
-                                        e.stopPropagation()
-                                        handleToggleBookInCollection(col)
-                                      }}
-                                      title={inCol ? `Elimină din colecția „${col.title}”` : `Adaugă în colecția „${col.title}”`}
-                                    >
-                                      <span className="book-shelf-option-col-label">
-                                        <Library size={13} className="book-shelf-option-col-icon" />
-                                        <span className="book-shelf-option-col-name">{col.title}</span>
-                                      </span>
-                                      {inCol ? (
-                                        <Check size={14} className="book-shelf-option-check" />
-                                      ) : isBusy ? (
-                                        <Loader2 size={13} className="spin" />
-                                      ) : null}
-                                    </button>
-                                  )
-                                })}
-                              </>
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      {isOwnCollectionModal ? (
-                        <button
-                          type="button"
-                          className="book-collection-remove-btn"
-                          disabled={isRemovingFromCollection}
-                          onClick={handleRemoveBookFromActiveCollection}
-                          title={`Elimină din colecția „${activeModalCollection.title}”`}
-                          aria-label={`Elimină din colecția „${activeModalCollection.title}”`}
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      ) : null}
-                    </div>
-                  )}
-                </div>
-
-                {/* Row 2 across both columns: Evaluare (rating section) */}
-                <div
-                  className="book-detail-rating-section"
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onPointerUp={(event) => event.stopPropagation()}
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  <div className="book-detail-rating-inline">
-                    <span className="book-detail-rating-text">
-                      {currentBookRating > 0
-                        ? `Evaluat la: ${currentBookRating}/5`
-                        : 'Evaluarea ta:'}
-                    </span>
-                    <div className="book-detail-rating-stars">
-                      <PeekRating
-                        value={currentBookRating}
-                        defaultValue={currentBookRating || 0}
-                        count={5}
-                        shape="star"
-                        labels={['1 - Slabă', '2 - Acceptabilă', '3 - Bună', '4 - Foarte bună', '5 - Excelentă']}
-                        activeColor="#FFB703"
-                        idleColor="#52525b"
-                        tipColor="#1e293b"
-                        tipTextColor="#f8fafc"
-                        size={19}
-                        gap={3}
-                        lift={3}
-                        magnify={1.15}
-                        riseDuration={180}
-                        popScale={1.3}
-                        showTip={false}
-                        allowClear
-                        onChange={handleRateBook}
-                      />
-                    </div>
                   </div>
                 </div>
+              </div>
 
-                <div className="book-detail-body">
-                  <h2>{selectedBook.title}</h2>
-                  <p className="book-detail-author">{selectedBook.author}</p>
+              {/* Row 1 across both columns: Shelf action */}
+              <div className="book-detail-shelf-action" ref={shelfDropdownRef}>
+                {!supabaseUser ? (
+                  <button
+                    type="button"
+                    className="book-shelf-login-prompt-btn"
+                    onClick={() => {
+                      closeBookDetails()
+                      setShowProfileModal(true)
+                    }}
+                  >
+                    <Bookmark size={15} />
+                    <span>Login to save</span>
+                  </button>
+                ) : (
+                  <div className="book-detail-shelf-action-row">
+                    <div className="book-shelf-dropdown-wrapper">
+                      <button
+                        type="button"
+                        className={`book-shelf-select-btn ${savedShelf ? 'saved' : ''} ${shelfDropdownOpen ? 'open' : ''}`}
+                        disabled={isSavingShelf}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setShelfDropdownOpen((prev) => !prev)
+                        }}
+                        aria-haspopup="listbox"
+                        aria-expanded={shelfDropdownOpen}
+                        title={savedShelf ? `Raft curent: ${getShelfLabel(targetShelf)}. Deschide pentru a schimba raftul` : 'Alege raftul'}
+                      >
+                        <span className="book-shelf-btn-content">
+                          {savedShelf ? <Check size={16} /> : <Bookmark size={16} />}
+                          <span>
+                            {isSavingShelf
+                              ? 'Se salvează...'
+                              : (savedShelf ? getShelfLabel(targetShelf) : 'Alege raftul')}
+                          </span>
+                        </span>
+                        <ChevronDown size={16} className={`chevron-icon ${shelfDropdownOpen ? 'open' : ''}`} />
+                      </button>
 
-                  {selectedBook.description ? (
-                    <p className="book-detail-description-text">{selectedBook.description}</p>
-                  ) : isDescriptionLoading ? (
-                    <div className="book-detail-description-skeleton" aria-hidden="true">
-                      <div className="skeleton-line" />
-                      <div className="skeleton-line" />
-                      <div className="skeleton-line short" />
+                      {shelfDropdownOpen && (
+                        <div className="book-shelf-options-menu" onClick={(e) => e.stopPropagation()}>
+                          {SHELF_OPTIONS.map((shelf) => (
+                            <button
+                              key={shelf.id}
+                              type="button"
+                              className={`book-shelf-option-item ${targetShelf === shelf.id && savedShelf ? 'active' : ''}`}
+                              onClick={() => {
+                                setShelfDropdownOpen(false)
+                                if (!savedShelf || targetShelf !== shelf.id) {
+                                  setTargetShelf(shelf.id)
+                                  handleSaveBookToShelf(shelf.id)
+                                }
+                              }}
+                            >
+                              <span>{shelf.label}</span>
+                              {targetShelf === shelf.id && savedShelf && <Check size={14} />}
+                            </button>
+                          ))}
+                          {savedShelf && (
+                            <>
+                              <div className="book-shelf-menu-divider" />
+                              <button
+                                type="button"
+                                className="book-shelf-option-item book-shelf-option-remove"
+                                onClick={() => {
+                                  setShelfDropdownOpen(false)
+                                  handleRemoveBookFromShelf()
+                                }}
+                              >
+                                <Trash2 size={14} />
+                                <span>Elimină de pe raft</span>
+                              </button>
+                            </>
+                          )}
+                          {userCollectionSummaries.length > 0 && (
+                            <>
+                              <div className="book-shelf-menu-divider" />
+                              <div className="book-shelf-menu-section-title">Colecții</div>
+                              {userCollectionSummaries.map((col) => {
+                                const colId = String(col.id)
+                                const inCol = selectedBookCollectionIds.has(colId)
+                                const isBusy = collectionActionInProgressId === colId
+                                return (
+                                  <button
+                                    key={col.id}
+                                    type="button"
+                                    className={`book-shelf-option-item book-shelf-option-collection ${inCol ? 'active' : ''}`}
+                                    disabled={isBusy}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleToggleBookInCollection(col)
+                                    }}
+                                    title={inCol ? `Elimină din colecția „${col.title}”` : `Adaugă în colecția „${col.title}”`}
+                                  >
+                                    <span className="book-shelf-option-col-label">
+                                      <Library size={13} className="book-shelf-option-col-icon" />
+                                      <span className="book-shelf-option-col-name">{col.title}</span>
+                                    </span>
+                                    {inCol ? (
+                                      <Check size={14} className="book-shelf-option-check" />
+                                    ) : isBusy ? (
+                                      <Loader2 size={13} className="spin" />
+                                    ) : null}
+                                  </button>
+                                )
+                              })}
+                            </>
+                          )}
+                        </div>
+                      )}
                     </div>
-                  ) : null}
 
-                  {loggedInUserBook?.myReview ? (
-                    <div className="book-detail-review-card">
-                      <span className="book-detail-label">Recenzia ta</span>
-                      <p className="book-detail-review-text">{loggedInUserBook.myReview}</p>
-                    </div>
-                  ) : selectedBook.review ? (
-                    <div className="book-detail-review-card">
-                      <span className="book-detail-label">Recenzie</span>
-                      <p className="book-detail-review-text">{selectedBook.review}</p>
-                    </div>
-                  ) : null}
+                    {isOwnCollectionModal ? (
+                      <button
+                        type="button"
+                        className="book-collection-remove-btn"
+                        disabled={isRemovingFromCollection}
+                        onClick={handleRemoveBookFromActiveCollection}
+                        title={`Elimină din colecția „${activeModalCollection.title}”`}
+                        aria-label={`Elimină din colecția „${activeModalCollection.title}”`}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+
+              {/* Row 2 across both columns: Evaluare (rating section) */}
+              <div
+                className="book-detail-rating-section"
+                onPointerDown={(event) => event.stopPropagation()}
+                onPointerUp={(event) => event.stopPropagation()}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="book-detail-rating-inline">
+                  <span className="book-detail-rating-text">
+                    {currentBookRating > 0
+                      ? `Evaluat la: ${currentBookRating}/5`
+                      : 'Evaluarea ta:'}
+                  </span>
+                  <div className="book-detail-rating-stars">
+                    <PeekRating
+                      value={currentBookRating}
+                      defaultValue={currentBookRating || 0}
+                      count={5}
+                      shape="star"
+                      labels={['1 - Slabă', '2 - Acceptabilă', '3 - Bună', '4 - Foarte bună', '5 - Excelentă']}
+                      activeColor="#FFB703"
+                      idleColor="#52525b"
+                      tipColor="#1e293b"
+                      tipTextColor="#f8fafc"
+                      size={19}
+                      gap={3}
+                      lift={3}
+                      magnify={1.15}
+                      riseDuration={180}
+                      popScale={1.3}
+                      showTip={false}
+                      allowClear
+                      onChange={handleRateBook}
+                    />
+                  </div>
                 </div>
+              </div>
+
+              <div className="book-detail-body">
+                <h2>{selectedBook.title}</h2>
+                <p className="book-detail-author">{selectedBook.author}</p>
+
+                {selectedBook.description ? (
+                  <p className="book-detail-description-text">{selectedBook.description}</p>
+                ) : isDescriptionLoading ? (
+                  <div className="book-detail-description-skeleton" aria-hidden="true">
+                    <div className="skeleton-line" />
+                    <div className="skeleton-line" />
+                    <div className="skeleton-line short" />
+                  </div>
+                ) : null}
+
+                {loggedInUserBook?.myReview ? (
+                  <div className="book-detail-review-card">
+                    <span className="book-detail-label">Recenzia ta</span>
+                    <p className="book-detail-review-text">{loggedInUserBook.myReview}</p>
+                  </div>
+                ) : selectedBook.review ? (
+                  <div className="book-detail-review-card">
+                    <span className="book-detail-label">Recenzie</span>
+                    <p className="book-detail-review-text">{selectedBook.review}</p>
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
-        ) : null
-        }
+        </div>
+      ) : null
+      }
 
-        {
-          showProfileModal ? (
-            <div
-              className="profile-modal-backdrop"
-              onPointerDown={(event) => {
-                profileModalBackdropPointerDownRef.current = event.target === event.currentTarget
-              }}
-              onClick={(event) => {
-                if (profileModalBackdropPointerDownRef.current && event.target === event.currentTarget) {
-                  setShowProfileModal(false)
-                }
-                profileModalBackdropPointerDownRef.current = false
-              }}
-            >
-              <div className="profile-modal" onClick={(event) => event.stopPropagation()}>
-                <div className="profile-modal-header">
-                  {supabaseUser ? (
-                    <div className="profile-modal-user-header">
-                      <div className="profile-user-badge">
-                        {profileUserHeaderName ? (
-                          <span className="profile-user-name">{profileUserHeaderName}</span>
-                        ) : null}
-                        <span className="profile-user-email">{supabaseUser.email}</span>
+      {
+        showProfileModal ? (
+          <div
+            className="profile-modal-backdrop"
+            onPointerDown={(event) => {
+              profileModalBackdropPointerDownRef.current = event.target === event.currentTarget
+            }}
+            onClick={(event) => {
+              if (profileModalBackdropPointerDownRef.current && event.target === event.currentTarget) {
+                setShowProfileModal(false)
+              }
+              profileModalBackdropPointerDownRef.current = false
+            }}
+          >
+            <div className="profile-modal" onClick={(event) => event.stopPropagation()}>
+              <div className="profile-modal-header">
+                {supabaseUser ? (
+                  <div className="profile-modal-user-header">
+                    <div className="profile-user-badge">
+                      {profileUserHeaderName ? (
+                        <span className="profile-user-name">{profileUserHeaderName}</span>
+                      ) : null}
+                      <span className="profile-user-email">{supabaseUser.email}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="profile-modal-header-spacer" />
+                )}
+                <button
+                  type="button"
+                  className="modal-close-btn"
+                  onClick={() => setShowProfileModal(false)}
+                  aria-label="Închide profilul"
+                  title="Închide"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {!supabaseUser ? (
+                <AuthModalView
+                  onSuccess={(user) => {
+                    setShowProfileModal(false)
+                    if (user) {
+                      setSupabaseUser(user)
+                      syncUserProfileWithServer(user, { hideModal: true })
+                    }
+                  }}
+                />
+              ) : (
+                <>
+                  <form className="profile-modal-form" onSubmit={handleUploadCsvSubmit}>
+                    <div className="profile-modal-field">
+                      <label htmlFor="profile-display-name-input" className="profile-modal-label">
+                        Numele tău
+                      </label>
+                      <div className="profile-name-input-wrapper">
+                        <input
+                          ref={nameInputRef}
+                          id="profile-display-name-input"
+                          type="text"
+                          value={displayNameInput}
+                          onChange={(event) => {
+                            setDisplayNameInput(event.target.value)
+                            setUploadError('')
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault()
+                              handleSaveDisplayName()
+                            }
+                          }}
+                          placeholder="ex: Alin"
+                          className="profile-modal-input profile-modal-input-with-action"
+                        />
+                        <button
+                          type="button"
+                          className={`profile-name-save-icon-btn ${savedName ? 'saved' : ''}`}
+                          onClick={handleSaveDisplayName}
+                          disabled={isSavingName || !displayNameInput.trim()}
+                          aria-label="Salvează numele"
+                          title={savedName ? 'Salvat!' : 'Salvează numele'}
+                        >
+                          {savedName ? <Check size={16} /> : <Save size={16} />}
+                        </button>
                       </div>
                     </div>
-                  ) : (
-                    <div className="profile-modal-header-spacer" />
-                  )}
-                  <button
-                    type="button"
-                    className="modal-close-btn"
-                    onClick={() => setShowProfileModal(false)}
-                    aria-label="Închide profilul"
-                    title="Închide"
-                  >
-                    <X size={18} />
-                  </button>
-                </div>
 
-                {!supabaseUser ? (
-                  <AuthModalView
-                    onSuccess={(user) => {
-                      setShowProfileModal(false)
-                      if (user) {
-                        setSupabaseUser(user)
-                        syncUserProfileWithServer(user, { hideModal: true })
-                      }
-                    }}
-                  />
-                ) : (
-                  <>
-                    <form className="profile-modal-form" onSubmit={handleUploadCsvSubmit}>
-                      <div className="profile-modal-field">
-                        <label htmlFor="profile-display-name-input" className="profile-modal-label">
-                          Numele tău
+                    <div className="profile-modal-field">
+                      <div className="profile-field-header-row">
+                        <label htmlFor="profile-description-input" className="profile-modal-label">
+                          Descriere
                         </label>
-                        <div className="profile-name-input-wrapper">
-                          <input
-                            ref={nameInputRef}
-                            id="profile-display-name-input"
-                            type="text"
-                            value={displayNameInput}
-                            onChange={(event) => {
-                              setDisplayNameInput(event.target.value)
-                              setUploadError('')
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.preventDefault()
-                                handleSaveDisplayName()
-                              }
-                            }}
-                            placeholder="ex: Alin"
-                            className="profile-modal-input profile-modal-input-with-action"
-                          />
-                          <button
-                            type="button"
-                            className={`profile-name-save-icon-btn ${savedName ? 'saved' : ''}`}
-                            onClick={handleSaveDisplayName}
-                            disabled={isSavingName || !displayNameInput.trim()}
-                            aria-label="Salvează numele"
-                            title={savedName ? 'Salvat!' : 'Salvează numele'}
-                          >
-                            {savedName ? <Check size={16} /> : <Save size={16} />}
-                          </button>
-                        </div>
+                        <span className="profile-char-counter">
+                          {descriptionInput.length}/140
+                        </span>
                       </div>
-
-                      <div className="profile-modal-field">
-                        <div className="profile-field-header-row">
-                          <label htmlFor="profile-description-input" className="profile-modal-label">
-                            Descriere
-                          </label>
-                          <span className="profile-char-counter">
-                            {descriptionInput.length}/140
-                          </span>
-                        </div>
-                        <div className="profile-name-input-wrapper">
-                          <textarea
-                            id="profile-description-input"
-                            rows={2}
-                            maxLength={140}
-                            value={descriptionInput}
-                            onChange={(event) => {
-                              setDescriptionInput(event.target.value)
-                              setUploadError('')
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-                                event.preventDefault()
-                                handleSaveDescription()
-                              }
-                            }}
-                            placeholder="ex: Pasionat de cărți SF și literatură clasică"
-                            className="profile-modal-input profile-modal-textarea-with-action"
-                          />
-                          <button
-                            type="button"
-                            className={`profile-name-save-icon-btn textarea-save-btn ${savedDescription ? 'saved' : ''}`}
-                            onClick={handleSaveDescription}
-                            disabled={isSavingDescription}
-                            aria-label="Salvează descrierea"
-                            title={savedDescription ? 'Salvat!' : 'Salvează descrierea'}
-                          >
-                            {savedDescription ? <Check size={16} /> : <Save size={16} />}
-                          </button>
-                        </div>
+                      <div className="profile-name-input-wrapper">
+                        <textarea
+                          id="profile-description-input"
+                          rows={2}
+                          maxLength={140}
+                          value={descriptionInput}
+                          onChange={(event) => {
+                            setDescriptionInput(event.target.value)
+                            setUploadError('')
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                              event.preventDefault()
+                              handleSaveDescription()
+                            }
+                          }}
+                          placeholder="ex: Pasionat de cărți SF și literatură clasică"
+                          className="profile-modal-input profile-modal-textarea-with-action"
+                        />
+                        <button
+                          type="button"
+                          className={`profile-name-save-icon-btn textarea-save-btn ${savedDescription ? 'saved' : ''}`}
+                          onClick={handleSaveDescription}
+                          disabled={isSavingDescription}
+                          aria-label="Salvează descrierea"
+                          title={savedDescription ? 'Salvat!' : 'Salvează descrierea'}
+                        >
+                          {savedDescription ? <Check size={16} /> : <Save size={16} />}
+                        </button>
                       </div>
+                    </div>
 
-                      <div className="profile-panel profile-csv-panel">
-                        <div className="profile-panel-header">
-                          <span className="profile-panel-title">Librărie Goodreads</span>
-                        </div>
-                        <p className="profile-panel-description">
-                          Exportă fișierul CSV din contul Goodreads (My Books &rarr; Import and export) și încarcă-l aici pentru a sincroniza cărțile, rafturile și recenziile tale.
-                        </p>
-
-                        <div className="profile-csv-center-action">
-                          <input
-                            id="profile-csv-input"
-                            type="file"
-                            accept=".csv,text/csv"
-                            onChange={handleCsvFileChange}
-                            className="profile-file-input-hidden"
-                          />
-                          <label htmlFor="profile-csv-input" className="profile-csv-choose-btn">
-                            <Upload size={16} />
-                            <span>{csvFile ? 'Schimbă fișierul CSV' : 'Selectează fișierul CSV'}</span>
-                          </label>
-
-                          {csvFile ? (
-                            <div className="profile-csv-selected-info">
-                              <FileText size={15} className="profile-csv-file-icon" />
-                              <span className="profile-csv-selected-name" title={csvFile.name}>{csvFile.name}</span>
-                            </div>
-                          ) : null}
-
-                          {csvFile ? (
-                            <button
-                              type="submit"
-                              className="profile-csv-submit-btn"
-                              disabled={isUploadingCsv || !displayNameInput.trim()}
-                              title="Actualizează librăria"
-                            >
-                              {isUploadingCsv ? (
-                                <span className="profile-btn-loading">
-                                  <Loader2 size={16} className="spin-icon" />
-                                  <span>Se încarcă...</span>
-                                </span>
-                              ) : (
-                                <>
-                                  <Check size={16} />
-                                  <span>Încarcă biblioteca</span>
-                                </>
-                              )}
-                            </button>
-                          ) : null}
-                        </div>
+                    <div className="profile-panel profile-csv-panel">
+                      <div className="profile-panel-header">
+                        <span className="profile-panel-title">Librărie Goodreads</span>
                       </div>
+                      <p className="profile-panel-description">
+                        Exportă fișierul CSV din contul Goodreads (My Books &rarr; Import and export) și încarcă-l aici pentru a sincroniza cărțile, rafturile și recenziile tale.
+                      </p>
 
-                      {uploadError ? <p className="profile-modal-error">{uploadError}</p> : null}
-                    </form>
+                      <div className="profile-csv-center-action">
+                        <input
+                          id="profile-csv-input"
+                          type="file"
+                          accept=".csv,text/csv"
+                          onChange={handleCsvFileChange}
+                          className="profile-file-input-hidden"
+                        />
+                        <label htmlFor="profile-csv-input" className="profile-csv-choose-btn">
+                          <Upload size={16} />
+                          <span>{csvFile ? 'Schimbă fișierul CSV' : 'Selectează fișierul CSV'}</span>
+                        </label>
 
-                    {generatedProfileUrl ? (
-                      <div className="profile-panel profile-share-panel">
-                        <div className="profile-panel-header">
-                          <span className="profile-panel-title">Distribuie profilul tău</span>
-                        </div>
-
-                        <div className="profile-url-field">
-                          <a
-                            href={generatedProfileUrl}
-                            className="profile-url-text"
-                            onClick={() => setShowProfileModal(false)}
-                            title="Mergi la librăria ta"
-                          >
-                            {generatedProfileUrl}
-                          </a>
-                          <div className="profile-url-btn-group">
-                            <button
-                              type="button"
-                              className={`profile-url-copy-icon-btn ${copiedUrl ? 'copied' : ''}`}
-                              onClick={handleCopyGeneratedUrl}
-                              aria-label="Copiază linkul"
-                              title={copiedUrl ? 'Copiat!' : 'Copiază linkul'}
-                            >
-                              {copiedUrl ? <Check size={16} /> : <Copy size={16} />}
-                            </button>
-                            <button
-                              type="button"
-                              className={`profile-url-share-icon-btn ${sharedUrl ? 'shared' : ''}`}
-                              onClick={handleShareGeneratedUrl}
-                              aria-label="Distribuie linkul"
-                              title={sharedUrl ? 'Distribuit!' : 'Distribuie linkul'}
-                            >
-                              {sharedUrl ? <Check size={16} /> : <Share2 size={16} />}
-                            </button>
-                          </div>
-                        </div>
-
-                        {qrCodeDataUrl ? (
-                          <div className="profile-qr-section">
-                            <div className="profile-qr-wrapper">
-                              <img src={qrCodeDataUrl} alt="Cod QR pentru linkul profilului tău" className="profile-qr-image" />
-                            </div>
-                            <p className="profile-qr-caption">
-                              Scanează codul QR pentru a deschide direct biblioteca ta publică de cărți.
-                            </p>
+                        {csvFile ? (
+                          <div className="profile-csv-selected-info">
+                            <FileText size={15} className="profile-csv-file-icon" />
+                            <span className="profile-csv-selected-name" title={csvFile.name}>{csvFile.name}</span>
                           </div>
                         ) : null}
+
+                        {csvFile ? (
+                          <button
+                            type="submit"
+                            className="profile-csv-submit-btn"
+                            disabled={isUploadingCsv || !displayNameInput.trim()}
+                            title="Actualizează librăria"
+                          >
+                            {isUploadingCsv ? (
+                              <span className="profile-btn-loading">
+                                <Loader2 size={16} className="spin-icon" />
+                                <span>Se încarcă...</span>
+                              </span>
+                            ) : (
+                              <>
+                                <Check size={16} />
+                                <span>Încarcă biblioteca</span>
+                              </>
+                            )}
+                          </button>
+                        ) : null}
                       </div>
-                    ) : null}
+                    </div>
 
-                    {isAdminUser ? (
-                      <button
-                        type="button"
-                        className="profile-modal-logout-btn-bottom"
-                        style={{
-                          marginBottom: 8,
-                          color: '#a7f3d0',
-                          borderColor: 'rgba(16, 185, 129, 0.3)',
-                          background: 'rgba(16, 185, 129, 0.08)',
-                        }}
-                        onClick={handleOpenAdminPage}
-                        title="Deschide panoul de administrare"
-                      >
-                        <Shield size={16} />
-                        <span>Administrare utilizatori</span>
-                      </button>
-                    ) : null}
+                    {uploadError ? <p className="profile-modal-error">{uploadError}</p> : null}
+                  </form>
 
+                  {generatedProfileUrl ? (
+                    <div className="profile-panel profile-share-panel">
+                      <div className="profile-panel-header">
+                        <span className="profile-panel-title">Distribuie profilul tău</span>
+                      </div>
+
+                      <div className="profile-url-field">
+                        <a
+                          href={generatedProfileUrl}
+                          className="profile-url-text"
+                          onClick={() => setShowProfileModal(false)}
+                          title="Mergi la librăria ta"
+                        >
+                          {generatedProfileUrl}
+                        </a>
+                        <div className="profile-url-btn-group">
+                          <button
+                            type="button"
+                            className={`profile-url-copy-icon-btn ${copiedUrl ? 'copied' : ''}`}
+                            onClick={handleCopyGeneratedUrl}
+                            aria-label="Copiază linkul"
+                            title={copiedUrl ? 'Copiat!' : 'Copiază linkul'}
+                          >
+                            {copiedUrl ? <Check size={16} /> : <Copy size={16} />}
+                          </button>
+                          <button
+                            type="button"
+                            className={`profile-url-share-icon-btn ${sharedUrl ? 'shared' : ''}`}
+                            onClick={handleShareGeneratedUrl}
+                            aria-label="Distribuie linkul"
+                            title={sharedUrl ? 'Distribuit!' : 'Distribuie linkul'}
+                          >
+                            {sharedUrl ? <Check size={16} /> : <Share2 size={16} />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {qrCodeDataUrl ? (
+                        <div className="profile-qr-section">
+                          <div className="profile-qr-wrapper">
+                            <img src={qrCodeDataUrl} alt="Cod QR pentru linkul profilului tău" className="profile-qr-image" />
+                          </div>
+                          <p className="profile-qr-caption">
+                            Scanează codul QR pentru a deschide direct biblioteca ta publică de cărți.
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {isAdminUser ? (
                     <button
                       type="button"
                       className="profile-modal-logout-btn-bottom"
-                      onClick={handleSignOut}
-                      title="Deconectare din cont"
+                      style={{
+                        marginBottom: 8,
+                        color: '#a7f3d0',
+                        borderColor: 'rgba(16, 185, 129, 0.3)',
+                        background: 'rgba(16, 185, 129, 0.08)',
+                      }}
+                      onClick={handleOpenAdminPage}
+                      title="Deschide panoul de administrare"
                     >
-                      <LogOut size={16} />
-                      <span>Deconectare</span>
+                      <Shield size={16} />
+                      <span>Administrare utilizatori</span>
                     </button>
-                  </>
-                )}
-              </div>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    className="profile-modal-logout-btn-bottom"
+                    onClick={handleSignOut}
+                    title="Deconectare din cont"
+                  >
+                    <LogOut size={16} />
+                    <span>Deconectare</span>
+                  </button>
+                </>
+              )}
             </div>
-          ) : null
-        }
+          </div>
+        ) : null
+      }
 
-        {error ? <div className="status-banner">{error}</div> : null}
+      {error ? <div className="status-banner">{error}</div> : null}
 
-        {isExploreMode ? (
-          <section className="collections-section" aria-label="Descoperă noutăți și colecții">
-            {(isLoadingFeed || isLoadingCollections) && mergedFeedItems.length === 0 ? (
-              <div className="feed-container" aria-live="polite" aria-label="Se încarcă noutățile">
-                {Array.from({ length: 3 }).map((_, i) => (
-                  <div key={`feed-skeleton-${i}`} className="feed-event-card" style={{ opacity: 0.7 }}>
-                    <div className="feed-event-header">
-                      <div className="loading-text short" style={{ width: 120, height: 22, borderRadius: 9999 }} />
-                      <div className="loading-text short" style={{ width: 60, height: 16 }} />
-                    </div>
-                    <div className="feed-single-book-card">
-                      <div className="loading-cover" style={{ width: 110, height: 165, borderRadius: 8 }} />
-                      <div className="feed-single-book-info" style={{ gap: 8, width: '100%' }}>
-                        <div className="loading-text" style={{ width: '80%', height: 20 }} />
-                        <div className="loading-text short" style={{ width: '50%', height: 16 }} />
-                        <div className="loading-text short" style={{ width: 130, height: 32, borderRadius: 9999, marginTop: 12 }} />
-                      </div>
+      {isExploreMode ? (
+        <section className="collections-section" aria-label="Descoperă noutăți și colecții">
+          {(isLoadingFeed || isLoadingCollections) && mergedFeedItems.length === 0 ? (
+            <div className="feed-container" aria-live="polite" aria-label="Se încarcă noutățile">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={`feed-skeleton-${i}`} className="feed-event-card" style={{ opacity: 0.7 }}>
+                  <div className="feed-event-header">
+                    <div className="loading-text short" style={{ width: 120, height: 22, borderRadius: 9999 }} />
+                    <div className="loading-text short" style={{ width: 60, height: 16 }} />
+                  </div>
+                  <div className="feed-single-book-card">
+                    <div className="loading-cover" style={{ width: 110, height: 165, borderRadius: 8 }} />
+                    <div className="feed-single-book-info" style={{ gap: 8, width: '100%' }}>
+                      <div className="loading-text" style={{ width: '80%', height: 20 }} />
+                      <div className="loading-text short" style={{ width: '50%', height: 16 }} />
+                      <div className="loading-text short" style={{ width: 130, height: 32, borderRadius: 9999, marginTop: 12 }} />
                     </div>
                   </div>
-                ))}
-              </div>
-            ) : mergedFeedItems.length === 0 ? (
-              <div className="feed-empty-state">
-                <Sparkles size={36} className="feed-empty-icon" />
-                <h2>Nu există activitate recentă</h2>
-                <p>Cărțile adăugate pe rafturi sau în colecții vor apărea aici.</p>
-              </div>
-            ) : (
-              <div className="feed-container">
-                {mergedFeedItems.map((event, eventIndex) => {
-                  const isMultiBook = Array.isArray(event.books) && event.books.length > 1
+                </div>
+              ))}
+            </div>
+          ) : mergedFeedItems.length === 0 ? (
+            <div className="feed-empty-state">
+              <Sparkles size={36} className="feed-empty-icon" />
+              <h2>Nu există activitate recentă</h2>
+              <p>Cărțile adăugate pe rafturi sau în colecții vor apărea aici.</p>
+            </div>
+          ) : (
+            <div className="feed-container">
+              {mergedFeedItems.map((event, eventIndex) => {
+                const isMultiBook = Array.isArray(event.books) && event.books.length > 1
 
-                  if (isMultiBook) {
-                    return (
-                      <article key={event.id} className="feed-event-card">
-                        <div className="feed-event-header">
-                          {renderFeedStatement(event, handleVisitUserProfile)}
-                          <span className="feed-time">{formatEventTime(event.createdAt)}</span>
-                        </div>
-
-                        {event.collection?.description && (
-                          <p className="feed-collection-description">{event.collection.description}</p>
-                        )}
-
-                        <div className="feed-multi-books">
-                          <div className="feed-books-carousel">
-                            {event.books.map((b, bIdx) => {
-                              const isSaved = isFeedBookSaved(b)
-                              const isAdding = quickAddingBookId === String(b.bookId || b.id)
-                              return (
-                                <div key={`${event.id}-${b.bookId || b.id || bIdx}`} className="feed-carousel-card">
-                                  <BookCoverCard
-                                    book={b}
-                                    isPriority={eventIndex < 2 && bIdx < 3}
-                                    onClick={() => handleOpenFeedBook(b, event)}
-                                  />
-                                  <button
-                                    type="button"
-                                    className={`feed-quick-add-btn-mini ${isSaved ? 'is-saved' : ''}`}
-                                    disabled={isSaved || isAdding}
-                                    onClick={(e) => handleQuickAddFeedBook(b, e)}
-                                    title={isSaved ? 'Pe raft' : 'Adaugă la De citit'}
-                                  >
-                                    {isAdding ? (
-                                      <Loader2 size={11} className="animate-spin" />
-                                    ) : isSaved ? (
-                                      <Check size={11} strokeWidth={2.5} />
-                                    ) : (
-                                      <Plus size={11} strokeWidth={2.5} />
-                                    )}
-                                    <span>{isSaved ? 'Pe raft' : 'Adaugă'}</span>
-                                  </button>
-                                </div>
-                              )
-                            })}
-                          </div>
-                        </div>
-                      </article>
-                    )
-                  }
-
-                  const singleBook = (event.books && event.books[0]) || event.book
-                  if (!singleBook) return null
-
-                  const isSaved = isFeedBookSaved(singleBook)
-                  const isAdding = quickAddingBookId === String(singleBook.bookId || singleBook.id)
-
+                if (isMultiBook) {
                   return (
                     <article key={event.id} className="feed-event-card">
                       <div className="feed-event-header">
@@ -5626,764 +5582,820 @@ function App() {
                         <p className="feed-collection-description">{event.collection.description}</p>
                       )}
 
-                      <div className="feed-single-book-card">
-                        <div className="feed-single-book-cover">
-                          <BookCoverCard
-                            book={singleBook}
-                            isPriority={eventIndex < 4}
-                            onClick={() => handleOpenFeedBook(singleBook, event)}
-                          />
-                        </div>
-
-                        <div className="feed-single-book-info">
-                          <h3
-                            className="feed-book-title"
-                            onClick={() => handleOpenFeedBook(singleBook, event)}
-                            title={singleBook.title}
-                          >
-                            {singleBook.title || 'Fără titlu'}
-                          </h3>
-                          {singleBook.author && (
-                            <p className="feed-book-author">{singleBook.author}</p>
-                          )}
-
-                          {event.eventType === 'book_rated' && event.metadata?.rating && (
-                            <div className="feed-book-rating" title={`Rating: ${event.metadata.rating} stele`}>
-                              {Array.from({ length: 5 }).map((_, i) => (
-                                <Star
-                                  key={i}
-                                  size={15}
-                                  className={i < Number(event.metadata.rating) ? 'fill-amber-400 text-amber-400' : 'text-zinc-600'}
+                      <div className="feed-multi-books">
+                        <div className="feed-books-carousel">
+                          {event.books.map((b, bIdx) => {
+                            const savedShelfLabel = getFeedBookSavedShelfLabel(b)
+                            const isSaved = Boolean(savedShelfLabel)
+                            const isAdding = quickAddingBookId === String(b.bookId || b.id)
+                            return (
+                              <div key={`${event.id}-${b.bookId || b.id || bIdx}`} className="feed-carousel-card">
+                                <BookCoverCard
+                                  book={b}
+                                  isPriority={eventIndex < 2 && bIdx < 3}
+                                  onClick={() => handleOpenFeedBook(b, event)}
                                 />
-                              ))}
-                            </div>
-                          )}
-
-                          <div className="feed-single-book-actions">
-                            <button
-                              type="button"
-                              className={`feed-quick-add-btn ${isSaved ? 'is-saved' : ''}`}
-                              disabled={isSaved || isAdding}
-                              onClick={(e) => handleQuickAddFeedBook(singleBook, e)}
-                              title={isSaved ? 'Cartea este deja pe raftul tău' : 'Adaugă pe raftul De citit'}
-                            >
-                              {isAdding ? (
-                                <>
-                                  <Loader2 size={14} className="animate-spin" />
-                                  <span>Se adaugă...</span>
-                                </>
-                              ) : isSaved ? (
-                                <>
-                                  <Check size={14} strokeWidth={2.5} />
-                                  <span>Pe raft</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Plus size={14} strokeWidth={2.5} />
-                                  <span>Vreau să citesc</span>
-                                </>
-                              )}
-                            </button>
-                          </div>
+                                <button
+                                  type="button"
+                                  className={`feed-quick-add-btn-mini ${isSaved ? 'is-saved' : ''}`}
+                                  disabled={isSaved || isAdding}
+                                  onClick={(e) => handleQuickAddFeedBook(b, e)}
+                                  title={isSaved ? savedShelfLabel : 'Adaugă la De citit'}
+                                >
+                                  {isAdding ? (
+                                    <Loader2 size={11} className="animate-spin" />
+                                  ) : isSaved ? (
+                                    <Check size={11} strokeWidth={2.5} />
+                                  ) : (
+                                    <Plus size={11} strokeWidth={2.5} />
+                                  )}
+                                  <span>{isSaved ? savedShelfLabel : 'Adaugă'}</span>
+                                </button>
+                              </div>
+                            )
+                          })}
                         </div>
                       </div>
                     </article>
                   )
-                })}
+                }
+
+                const singleBook = (event.books && event.books[0]) || event.book
+                if (!singleBook) return null
+
+                const savedShelfLabel = getFeedBookSavedShelfLabel(singleBook)
+                const isSaved = Boolean(savedShelfLabel)
+                const isAdding = quickAddingBookId === String(singleBook.bookId || singleBook.id)
+
+                return (
+                  <article key={event.id} className="feed-event-card">
+                    <div className="feed-event-header">
+                      {renderFeedStatement(event, handleVisitUserProfile)}
+                      <span className="feed-time">{formatEventTime(event.createdAt)}</span>
+                    </div>
+
+                    {event.collection?.description && (
+                      <p className="feed-collection-description">{event.collection.description}</p>
+                    )}
+
+                    <div className="feed-single-book-card">
+                      <div className="feed-single-book-cover">
+                        <BookCoverCard
+                          book={singleBook}
+                          isPriority={eventIndex < 4}
+                          onClick={() => handleOpenFeedBook(singleBook, event)}
+                        />
+                      </div>
+
+                      <div className="feed-single-book-info">
+                        <h3
+                          className="feed-book-title"
+                          onClick={() => handleOpenFeedBook(singleBook, event)}
+                          title={singleBook.title}
+                        >
+                          {singleBook.title || 'Fără titlu'}
+                        </h3>
+                        {singleBook.author && (
+                          <p className="feed-book-author">{singleBook.author}</p>
+                        )}
+
+                        {event.eventType === 'book_rated' && event.metadata?.rating && (
+                          <div className="feed-book-rating" title={`Rating: ${event.metadata.rating} stele`}>
+                            {Array.from({ length: 5 }).map((_, i) => (
+                              <Star
+                                key={i}
+                                size={15}
+                                className={i < Number(event.metadata.rating) ? 'fill-amber-400 text-amber-400' : 'text-zinc-600'}
+                              />
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="feed-single-book-actions">
+                          <button
+                            type="button"
+                            className={`feed-quick-add-btn ${isSaved ? 'is-saved' : ''}`}
+                            disabled={isSaved || isAdding}
+                            onClick={(e) => handleQuickAddFeedBook(singleBook, e)}
+                            title={isSaved ? 'Cartea este deja pe raftul tău' : 'Adaugă pe raftul De citit'}
+                          >
+                            {isAdding ? (
+                              <>
+                                <Loader2 size={14} className="animate-spin" />
+                                <span>Se adaugă...</span>
+                              </>
+                            ) : isSaved ? (
+                              <>
+                                <Check size={14} strokeWidth={2.5} />
+                                <span>{savedShelfLabel}</span>
+                              </>
+                            ) : (
+                              <>
+                                <Plus size={14} strokeWidth={2.5} />
+                                <span>Vreau să citesc</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          )}
+        </section>
+      ) : activeShelf === 'collections' ? (
+        <section className="collections-section" aria-label="Colecții">
+          {isLoadingCollections ? (
+            <div className="books-carousel loading-carousel" aria-live="polite" aria-label="Loading collections">
+              {Array.from({ length: 4 }).map((_, index) => (
+                <div key={`loading-col-${index}`} className="book-card loading-card">
+                  <div className="loading-cover" />
+                  <div className="loading-text" />
+                  <div className="loading-text short" />
+                </div>
+              ))}
+            </div>
+          ) : filteredUserCollections.length === 0 ? (
+            <div className="collections-empty-state">
+              <Library size={32} className="collections-empty-icon" />
+              <h2>
+                {userCollections.length > 0 && activeCollectionFilter === 'private'
+                  ? 'Nu există nicio colecție privată.'
+                  : userCollections.length > 0 && activeCollectionFilter === 'public'
+                    ? 'Nu există nicio colecție publică.'
+                    : isOwnProfile
+                      ? 'Nu ai creat încă nicio colecție.'
+                      : 'Acest utilizator nu are încă nicio colecție.'}
+              </h2>
+              {isOwnProfile && !showNewCollectionInput ? (
+                <button
+                  type="button"
+                  className="collections-new-trigger-btn"
+                  onClick={() => {
+                    setNewCollectionError('')
+                    setShowNewCollectionInput(true)
+                  }}
+                >
+                  <Plus size={16} />
+                  <span>Creează prima ta colecție</span>
+                </button>
+              ) : null}
+            </div>
+          ) : (
+            <div className="collections-rows-list">
+              {
+                filteredUserCollections.map((collection) => {
+                  const activeUser = getActiveCollectionUserId()
+                  const isCollectionOwner = Boolean(
+                    isUserLoggedIn && activeUser && String(collection.userId) === String(activeUser),
+                  )
+                  return (
+                    <CollectionRow
+                      key={collection.id}
+                      collection={collection}
+                      isOwner={isCollectionOwner}
+                      isExplore={false}
+                      showCreator={false}
+                      onSelectCreator={handleSelectExploreCreator}
+                      onAddBookClick={handleOpenAddBookForCollection}
+                      onDeleteCollection={handleDeleteCollection}
+                      onBookClick={handleOpenCollectionBook}
+                      onEditCollection={handleOpenEditCollection}
+                    />
+                  )
+                })
+              }
+            </div>
+          )}
+        </section>
+      ) : (
+        <>
+          {isLoading || !isShelfReady ? (
+            <div className="book-controls book-controls-placeholder" aria-hidden="true" />
+          ) : totalShelfBooks.length > 0 || bookSearchQuery.trim() ? (
+            <div
+              className="book-controls"
+              aria-label="Book controls"
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <div className="toolbar-group">
+                <GlideSelect
+                  options={glideAuthorOptions}
+                  value={activeAuthorFilter}
+                  onChange={(val) => setActiveAuthorFilter(val)}
+                  ariaLabel="Selectează autorul"
+                  showTags
+                  accentColor="#c4b5fd"
+                  surfaceColor="rgba(15, 23, 42, 0.85)"
+                  highlightColor="rgba(139, 92, 246, 0.35)"
+                  textColor="#f8fafc"
+                  size="md"
+                  align="left"
+                  placement='bottom'
+                  radius={10}
+                  menuWidth={240}
+                  icon={<UserSearch size={13} strokeWidth={2} />}
+                />
               </div>
-            )}
-          </section>
-        ) : activeShelf === 'collections' ? (
-          <section className="collections-section" aria-label="Colecții">
-            {isLoadingCollections ? (
-              <div className="books-carousel loading-carousel" aria-live="polite" aria-label="Loading collections">
-                {Array.from({ length: 4 }).map((_, index) => (
-                  <div key={`loading-col-${index}`} className="book-card loading-card">
+
+              <div className="toolbar-group">
+                <GlideSelect
+                  options={glideSortOptions}
+                  value={activeBookSort}
+                  onChange={(val) => setActiveBookSort(val)}
+                  ariaLabel="Sortează cărțile"
+                  accentColor="#c4b5fd"
+                  surfaceColor="rgba(15, 23, 42, 0.85)"
+                  highlightColor="rgba(139, 92, 246, 0.35)"
+                  textColor="#f8fafc"
+                  size="md"
+                  align="left"
+                  radius={10}
+                  menuWidth={160}
+                  icon={<ArrowUpDown size={13} strokeWidth={2} />}
+                />
+              </div>
+
+              <div className="toolbar-group">
+                <ShelfSearchInput
+                  searchQuery={bookSearchQuery}
+                  onSearch={setBookSearchQuery}
+                />
+              </div>
+            </div>
+          ) : null}
+
+          <section
+            className="carousel-panel"
+            aria-label="Book carousel"
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+          >
+            {shouldShowCarouselNavigation && isShelfReady && !isLoading ? (
+              <button
+                type="button"
+                className="nav-button"
+                onClick={() => scrollBooks(-1)}
+                aria-label="Scroll books left"
+              >
+                ←
+              </button>
+            ) : null}
+
+            {isLoading || !isShelfReady ? (
+              <div className="books-carousel loading-carousel" aria-live="polite" aria-label="Loading books">
+                {Array.from({ length: 5 }).map((_, index) => (
+                  <div key={`loading-${index}`} className="book-card loading-card">
                     <div className="loading-cover" />
                     <div className="loading-text" />
                     <div className="loading-text short" />
                   </div>
                 ))}
               </div>
-            ) : filteredUserCollections.length === 0 ? (
-              <div className="collections-empty-state">
-                <Library size={32} className="collections-empty-icon" />
-                <h2>
-                  {userCollections.length > 0 && activeCollectionFilter === 'private'
-                    ? 'Nu există nicio colecție privată.'
-                    : userCollections.length > 0 && activeCollectionFilter === 'public'
-                      ? 'Nu există nicio colecție publică.'
-                      : isOwnProfile
-                        ? 'Nu ai creat încă nicio colecție.'
-                        : 'Acest utilizator nu are încă nicio colecție.'}
-                </h2>
-                {isOwnProfile && !showNewCollectionInput ? (
-                  <button
-                    type="button"
-                    className="collections-new-trigger-btn"
-                    onClick={() => {
-                      setNewCollectionError('')
-                      setShowNewCollectionInput(true)
-                    }}
-                  >
-                    <Plus size={16} />
-                    <span>Creează prima ta colecție</span>
-                  </button>
-                ) : null}
-              </div>
-            ) : (
-              <div className="collections-rows-list">
-                {
-                  filteredUserCollections.map((collection) => {
-                    const activeUser = getActiveCollectionUserId()
-                    const isCollectionOwner = Boolean(
-                      isUserLoggedIn && activeUser && String(collection.userId) === String(activeUser),
-                    )
-                    return (
-                      <CollectionRow
-                        key={collection.id}
-                        collection={collection}
-                        isOwner={isCollectionOwner}
-                        isExplore={false}
-                        showCreator={false}
-                        onSelectCreator={handleSelectExploreCreator}
-                        onAddBookClick={handleOpenAddBookForCollection}
-                        onDeleteCollection={handleDeleteCollection}
-                        onBookClick={handleOpenCollectionBook}
-                        onEditCollection={handleOpenEditCollection}
-                      />
-                    )
-                  })
-                }
-              </div>
-            )}
-          </section>
-        ) : (
-          <>
-            {isLoading || !isShelfReady ? (
-              <div className="book-controls book-controls-placeholder" aria-hidden="true" />
-            ) : totalShelfBooks.length > 0 || bookSearchQuery.trim() ? (
-              <div
-                className="book-controls"
-                aria-label="Book controls"
-                onClick={(e) => e.stopPropagation()}
-                onPointerDown={(e) => e.stopPropagation()}
-              >
-                <div className="toolbar-group">
-                  <GlideSelect
-                    options={glideAuthorOptions}
-                    value={activeAuthorFilter}
-                    onChange={(val) => setActiveAuthorFilter(val)}
-                    ariaLabel="Selectează autorul"
-                    showTags
-                    accentColor="#c4b5fd"
-                    surfaceColor="rgba(15, 23, 42, 0.85)"
-                    highlightColor="rgba(139, 92, 246, 0.35)"
-                    textColor="#f8fafc"
-                    size="md"
-                    align="left"
-                    placement='bottom'
-                    radius={10}
-                    menuWidth={240}
-                    icon={<UserSearch size={13} strokeWidth={2} />}
-                  />
-                </div>
-
-                <div className="toolbar-group">
-                  <GlideSelect
-                    options={glideSortOptions}
-                    value={activeBookSort}
-                    onChange={(val) => setActiveBookSort(val)}
-                    ariaLabel="Sortează cărțile"
-                    accentColor="#c4b5fd"
-                    surfaceColor="rgba(15, 23, 42, 0.85)"
-                    highlightColor="rgba(139, 92, 246, 0.35)"
-                    textColor="#f8fafc"
-                    size="md"
-                    align="left"
-                    radius={10}
-                    menuWidth={160}
-                    icon={<ArrowUpDown size={13} strokeWidth={2} />}
-                  />
-                </div>
-
-                <div className="toolbar-group">
-                  <ShelfSearchInput
-                    searchQuery={bookSearchQuery}
-                    onSearch={setBookSearchQuery}
-                  />
-                </div>
-              </div>
-            ) : null}
-
-            <section
-              className="carousel-panel"
-              aria-label="Book carousel"
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerCancel={handlePointerUp}
-            >
-              {shouldShowCarouselNavigation && isShelfReady && !isLoading ? (
-                <button
-                  type="button"
-                  className="nav-button"
-                  onClick={() => scrollBooks(-1)}
-                  aria-label="Scroll books left"
-                >
-                  ←
-                </button>
-              ) : null}
-
-              {isLoading || !isShelfReady ? (
-                <div className="books-carousel loading-carousel" aria-live="polite" aria-label="Loading books">
-                  {Array.from({ length: 5 }).map((_, index) => (
-                    <div key={`loading-${index}`} className="book-card loading-card">
-                      <div className="loading-cover" />
-                      <div className="loading-text" />
-                      <div className="loading-text short" />
-                    </div>
-                  ))}
-                </div>
-              ) : username && visibleBooks.length === 0 ? (
-                <div className="books-carousel empty-carousel" aria-live="polite" aria-label="Empty shelf">
-                  <div className="empty-shelf-state">
-                    <h2>{bookSearchQuery.trim() ? 'Nicio carte găsită pentru căutarea ta.' : 'Nu exista nimic pe acest raft.'}</h2>
-                    {bookSearchQuery.trim() ? (
-                      <button
-                        type="button"
-                        className="empty-shelf-clear-search-btn"
-                        onClick={() => setBookSearchQuery('')}
-                      >
-                        Resetează căutarea
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              ) : (
-                <div className="books-carousel" ref={carouselRef}>
-                  {visibleBooks.slice(0, bookRenderLimit).map((book, index) => {
-
-                    return (
-                      <article key={book.id} className="book-card">
-                        <BookCoverCard
-                          book={book}
-                          isPriority={index < 6}
-                          onClick={(event) => handleBookTap(book, event)}
-                        />
-
-                        <div className="book-meta">
-                          <h2
-                            onClick={(event) => handleBookTap(book, event)}
-                            style={{ cursor: 'pointer' }}
-                          >
-                            {book.title}
-                          </h2>
-                          <p>{book.author}</p>
-                          {activeShelf === 'read' ? (
-                            <>
-                              <div className="book-rating" aria-label={`User rating: ${book.rating} out of 5`}>
-                                {renderStars(book.rating)}
-                              </div>
-                            </>
-                          ) : null}
-                          {book.averageRating ? (
-                            <div className="book-average-rating" aria-label={`Average Goodreads rating: ${book.averageRating}`}>
-                              <span style={{ marginRight: '4px' }} aria-hidden="true">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="bi bi-people-fill" viewBox="0 0 16 16">
-                                  <path d="M7 14s-1 0-1-1 1-4 5-4 5 3 5 4-1 1-1 1zm4-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6m-5.784 6A2.24 2.24 0 0 1 5 13c0-1.355.68-2.75 1.936-3.72A6.3 6.3 0 0 0 5 9c-4 0-5 3-5 4s1 1 1 1zM4.5 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5" />
-                                </svg>
-                              </span>
-                              {book.averageRating.toFixed(2)}
-                            </div>
-                          ) : null}
-                        </div>
-                      </article>
-                    )
-                  })}
-                </div>
-              )}
-
-              {shouldShowCarouselNavigation ? (
-                <button
-                  type="button"
-                  className="nav-button"
-                  onClick={() => scrollBooks(1)}
-                  aria-label="Scroll books right"
-                >
-                  →
-                </button>
-              ) : null}
-
-            </section>
-          </>
-        )}
-
-        {isVisitingOtherUser && (
-          <button
-            type="button"
-            className="back-url-trigger-round"
-            onClick={handleBackNavigation}
-            aria-label="Înapoi"
-            title="Înapoi"
-          >
-            <ArrowLeft size={18} strokeWidth={2.4} />
-          </button>
-        )}
-
-        {!isCheckingAuth && (
-          supabaseUser ? (
-            <button
-              type="button"
-              className="profile-url-trigger-round"
-              onClick={handleOpenProfileModal}
-              aria-label="Profil și încărcare CSV"
-              title="Profil și încărcare CSV"
-            >
-              <UserRoundPen size={18} strokeWidth={2.2} />
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="profile-url-trigger"
-              onClick={handleOpenProfileModal}
-            >
-              <WandSparkles size={16} strokeWidth={2} />
-              Creează librăria ta
-            </button>
-          )
-        )}
-
-        {!isCheckingAuth && isUserLoggedIn && !isExploreMode && (
-          <button
-            type="button"
-            className="sticky-add-book-btn"
-            onClick={() => {
-              if (activeShelf === 'collections') {
-                const activeUser = getActiveCollectionUserId()
-                if (activeUser && String(currentUserId) !== String(activeUser)) {
-                  setCurrentUserId(String(activeUser))
-                  window.history.pushState({}, '', `/${activeUser}/collections`)
-                }
-                setNewCollectionError('')
-                setShowNewCollectionInput(true)
-                window.scrollTo({ top: 0, behavior: 'smooth' })
-                return
-              }
-              const defaultShelf = SHELF_OPTIONS.some((s) => s.id === activeShelf) ? activeShelf : 'to-read'
-              setTargetShelf(defaultShelf)
-              setTargetCollectionForSearch(null)
-              setIsSearchModalOpen(true)
-              setSearchError('')
-            }}
-            aria-label={
-              activeShelf === 'collections'
-                ? 'Creează o colecție nouă'
-                : `Adaugă o carte în ${getShelfLabel(activeShelf)}`
-            }
-            title={
-              activeShelf === 'collections'
-                ? 'Creează o colecție nouă'
-                : `Adaugă o carte în ${getShelfLabel(activeShelf)}`
-            }
-          >
-            <Plus size={24} strokeWidth={2.4} />
-          </button>
-        )}
-
-        {showNewCollectionInput && (
-          <div
-            className="profile-modal-backdrop"
-            onPointerDown={(e) => {
-              if (e.target === e.currentTarget) {
-                setShowNewCollectionInput(false)
-                setNewCollectionTitle('')
-                setNewCollectionDescription('')
-                setNewCollectionIsPrivate(false)
-                setNewCollectionError('')
-              }
-            }}
-            onClick={(e) => {
-              if (e.target === e.currentTarget) {
-                setShowNewCollectionInput(false)
-                setNewCollectionTitle('')
-                setNewCollectionDescription('')
-                setNewCollectionIsPrivate(false)
-                setNewCollectionError('')
-              }
-            }}
-          >
-            <div
-              className="profile-modal collection-modal"
-              onClick={(e) => e.stopPropagation()}
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="create-collection-modal-title"
-            >
-              <div className="search-modal-header">
-                <h2 id="create-collection-modal-title" className="search-modal-title">
-                  Colecție nouă
-                </h2>
-                <button
-                  type="button"
-                  className="modal-close-btn"
-                  onClick={() => {
-                    setShowNewCollectionInput(false)
-                    setNewCollectionTitle('')
-                    setNewCollectionDescription('')
-                    setNewCollectionIsPrivate(false)
-                    setNewCollectionError('')
-                  }}
-                  aria-label="Închide"
-                  title="Închide"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              <form className="collections-new-form" onSubmit={handleCreateCollection}>
-                {newCollectionError && (
-                  <div className="collections-modal-error" role="alert">
-                    {newCollectionError}
-                  </div>
-                )}
-
-                <div className="collections-new-fields">
-                  <label className="collections-modal-label">
-                    <span>Titlu colecție</span>
-                    <input
-                      type="text"
-                      className="search-input collections-modal-input"
-                      placeholder="Ex: Top SF, Cărți de vacanță..."
-                      value={newCollectionTitle}
-                      onChange={(e) => {
-                        setNewCollectionTitle(e.target.value)
-                        if (newCollectionError) setNewCollectionError('')
-                      }}
-                      autoFocus
-                      maxLength={80}
-                    />
-                  </label>
-
-                  <label className="collections-modal-label">
-                    <div className="collections-modal-label-row">
-                      <span>Descriere scurtă (opțional)</span>
-                      <span className="collections-new-desc-counter">
-                        {newCollectionDescription.length}/140
-                      </span>
-                    </div>
-                    <textarea
-                      className="search-input collections-modal-textarea"
-                      placeholder="O scurtă descriere a colecției (max 140 caractere)..."
-                      value={newCollectionDescription}
-                      onChange={(e) => {
-                        setNewCollectionDescription(e.target.value.slice(0, 140))
-                        if (newCollectionError) setNewCollectionError('')
-                      }}
-                      maxLength={140}
-                      rows={3}
-                    />
-                  </label>
-                </div>
-
-                <div className="collections-new-footer">
-                  <label className="collections-new-private-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={newCollectionIsPrivate}
-                      onChange={(e) => setNewCollectionIsPrivate(e.target.checked)}
-                    />
-                    <Lock size={15} />
-                    <span>Colecție privată (vizibilă doar pentru tine)</span>
-                  </label>
-
-                  <div className="collections-new-actions">
+            ) : username && visibleBooks.length === 0 ? (
+              <div className="books-carousel empty-carousel" aria-live="polite" aria-label="Empty shelf">
+                <div className="empty-shelf-state">
+                  <h2>{bookSearchQuery.trim() ? 'Nicio carte găsită pentru căutarea ta.' : 'Nu exista nimic pe acest raft.'}</h2>
+                  {bookSearchQuery.trim() ? (
                     <button
                       type="button"
-                      className="collections-new-cancel-btn"
-                      onClick={() => {
-                        setShowNewCollectionInput(false)
-                        setNewCollectionTitle('')
-                        setNewCollectionDescription('')
-                        setNewCollectionIsPrivate(false)
-                        setNewCollectionError('')
-                      }}
+                      className="empty-shelf-clear-search-btn"
+                      onClick={() => setBookSearchQuery('')}
                     >
-                      Anulează
-                    </button>
-                    <button
-                      type="submit"
-                      className="search-submit-btn"
-                      disabled={isCreatingCollection || !newCollectionTitle.trim()}
-                    >
-                      {isCreatingCollection ? (
-                        <>
-                          <Loader2 size={16} className="spin-icon" />
-                          <span>Se creează...</span>
-                        </>
-                      ) : (
-                        'Creează colecția'
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {editingCollection && (
-          <div
-            className="profile-modal-backdrop"
-            onPointerDown={(e) => {
-              if (e.target === e.currentTarget) {
-                handleCloseEditCollection()
-              }
-            }}
-            onClick={(e) => {
-              if (e.target === e.currentTarget) {
-                handleCloseEditCollection()
-              }
-            }}
-          >
-            <div
-              className="profile-modal collection-modal"
-              onClick={(e) => e.stopPropagation()}
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="edit-collection-modal-title"
-            >
-              <div className="search-modal-header">
-                <h2 id="edit-collection-modal-title" className="search-modal-title">
-                  Editează colecția
-                </h2>
-                <button
-                  type="button"
-                  className="modal-close-btn"
-                  onClick={handleCloseEditCollection}
-                  aria-label="Închide"
-                  title="Închide"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              <form className="collections-new-form" onSubmit={handleSaveEditCollection}>
-                {editCollectionError && (
-                  <div className="collections-modal-error" role="alert">
-                    {editCollectionError}
-                  </div>
-                )}
-
-                <div className="collections-new-fields">
-                  <label className="collections-modal-label">
-                    <span>Titlu colecție</span>
-                    <input
-                      type="text"
-                      className="search-input collections-modal-input"
-                      placeholder="Ex: Top SF, Cărți de vacanță..."
-                      value={editCollectionTitle}
-                      onChange={(e) => {
-                        setEditCollectionTitle(e.target.value)
-                        if (editCollectionError) setEditCollectionError('')
-                      }}
-                      autoFocus
-                      maxLength={80}
-                    />
-                  </label>
-
-                  <label className="collections-modal-label">
-                    <div className="collections-modal-label-row">
-                      <span>Descriere scurtă (opțional)</span>
-                      <span className="collections-new-desc-counter">
-                        {editCollectionDescription.length}/140
-                      </span>
-                    </div>
-                    <textarea
-                      className="search-input collections-modal-textarea"
-                      placeholder="O scurtă descriere a colecției (max 140 caractere)..."
-                      value={editCollectionDescription}
-                      onChange={(e) => {
-                        setEditCollectionDescription(e.target.value.slice(0, 140))
-                        if (editCollectionError) setEditCollectionError('')
-                      }}
-                      maxLength={140}
-                      rows={3}
-                    />
-                  </label>
-                </div>
-
-                <div className="collections-new-footer">
-                  <label className="collections-new-private-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={editCollectionIsPrivate}
-                      onChange={(e) => setEditCollectionIsPrivate(e.target.checked)}
-                    />
-                    <Lock size={15} />
-                    <span>Colecție privată (vizibilă doar pentru tine)</span>
-                  </label>
-
-                  <div className="collections-new-actions">
-                    <button
-                      type="button"
-                      className="collections-new-cancel-btn"
-                      onClick={handleCloseEditCollection}
-                    >
-                      Anulează
-                    </button>
-                    <button
-                      type="submit"
-                      className="search-submit-btn"
-                      disabled={isSavingEditCollection || !editCollectionTitle.trim()}
-                    >
-                      {isSavingEditCollection ? (
-                        <>
-                          <Loader2 size={16} className="spin-icon" />
-                          <span>Se salvează...</span>
-                        </>
-                      ) : (
-                        'Save'
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {isSearchModalOpen && !selectedBook && (
-          <div
-            className="search-modal-backdrop"
-            onPointerDown={(e) => {
-              if (e.target === e.currentTarget) {
-                setIsSearchModalOpen(false)
-                setTargetCollectionForSearch(null)
-              }
-            }}
-            onClick={(e) => {
-              if (e.target === e.currentTarget) {
-                setIsSearchModalOpen(false)
-                setTargetCollectionForSearch(null)
-              }
-            }}
-          >
-            <div
-              className="search-modal"
-              onClick={(e) => e.stopPropagation()}
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="search-modal-title"
-            >
-              <div className="search-modal-header">
-                <h2 id="search-modal-title" className="search-modal-title">
-                  {targetCollectionForSearch
-                    ? `Adaugă în „${targetCollectionForSearch.title}”`
-                    : `Adaugă în „${getShelfLabel(activeShelf)}”`}
-                </h2>
-                <button
-                  type="button"
-                  className="modal-close-btn"
-                  onClick={() => {
-                    setIsSearchModalOpen(false)
-                    setTargetCollectionForSearch(null)
-                  }}
-                  aria-label="Închide căutarea"
-                  title="Închide"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              <form className="search-modal-form" onSubmit={handleSearchSubmit}>
-                <div className="search-input-wrapper">
-                  <Search size={18} className="search-input-icon" />
-                  <input
-                    type="text"
-                    className="search-input"
-                    placeholder="Caută după titlu, autor sau ISBN..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    autoFocus
-                  />
-                  {searchQuery ? (
-                    <button
-                      type="button"
-                      className="search-input-clear-btn"
-                      onClick={() => setSearchQuery('')}
-                      aria-label="Șterge textul"
-                    >
-                      ×
+                      Resetează căutarea
                     </button>
                   ) : null}
                 </div>
-                <button
-                  type="submit"
-                  className="search-submit-btn"
-                  disabled={isSearching || !searchQuery.trim()}
-                >
-                  {isSearching ? <Loader2 size={16} className="spin-icon" /> : 'Caută'}
-                </button>
-              </form>
+              </div>
+            ) : (
+              <div className="books-carousel" ref={carouselRef}>
+                {visibleBooks.slice(0, bookRenderLimit).map((book, index) => {
 
-              {isSearching ? (
-                <div className="search-loading-state">
-                  <Loader2 size={24} className="spin-icon" />
-                  <span>Se caută pe Google Books...</span>
-                </div>
-              ) : searchError ? (
-                <div className="search-error-state">{searchError}</div>
-              ) : hasSearched && searchResults.length === 0 ? (
-                <div className="search-empty-state">
-                  Nu am găsit nicio carte pentru „{searchQuery}”.
-                </div>
-              ) : searchResults.length > 0 ? (
-                <div className="search-results-list">
-                  {searchResults.map((book) => (
-                    <div
-                      key={book.bookId}
-                      className="search-result-item"
-                      onClick={() => handleSelectSearchBook(book)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault()
-                          handleSelectSearchBook(book)
-                        }
-                      }}
-                    >
-                      <div className="search-result-cover">
-                        {book.imageUrl ? (
-                          <img src={book.imageUrl} alt={book.title} />
-                        ) : (
-                          <div className="search-result-cover-placeholder">📖</div>
-                        )}
-                      </div>
-                      <div className="search-result-info">
-                        <div className="search-result-title" title={book.title}>
+                  return (
+                    <article key={book.id} className="book-card">
+                      <BookCoverCard
+                        book={book}
+                        isPriority={index < 6}
+                        onClick={(event) => handleBookTap(book, event)}
+                      />
+
+                      <div className="book-meta">
+                        <h2
+                          onClick={(event) => handleBookTap(book, event)}
+                          style={{ cursor: 'pointer' }}
+                        >
                           {book.title}
-                        </div>
-                        <div className="search-result-author" title={book.author}>
-                          {book.author}
-                        </div>
-                        {book.publishedYear ? (
-                          <span className="search-result-year">
-                            {book.publishedYear}
-                          </span>
+                        </h2>
+                        <p>{book.author}</p>
+                        {activeShelf === 'read' ? (
+                          <>
+                            <div className="book-rating" aria-label={`User rating: ${book.rating} out of 5`}>
+                              {renderStars(book.rating)}
+                            </div>
+                          </>
+                        ) : null}
+                        {book.averageRating ? (
+                          <div className="book-average-rating" aria-label={`Average Goodreads rating: ${book.averageRating}`}>
+                            <span style={{ marginRight: '4px' }} aria-hidden="true">
+                              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="bi bi-people-fill" viewBox="0 0 16 16">
+                                <path d="M7 14s-1 0-1-1 1-4 5-4 5 3 5 4-1 1-1 1zm4-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6m-5.784 6A2.24 2.24 0 0 1 5 13c0-1.355.68-2.75 1.936-3.72A6.3 6.3 0 0 0 5 9c-4 0-5 3-5 4s1 1 1 1zM4.5 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5" />
+                              </svg>
+                            </span>
+                            {book.averageRating.toFixed(2)}
+                          </div>
                         ) : null}
                       </div>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
+                    </article>
+                  )
+                })}
+              </div>
+            )}
+
+            {shouldShowCarouselNavigation ? (
+              <button
+                type="button"
+                className="nav-button"
+                onClick={() => scrollBooks(1)}
+                aria-label="Scroll books right"
+              >
+                →
+              </button>
+            ) : null}
+
+          </section>
+        </>
+      )}
+
+      {isVisitingOtherUser && (
+        <button
+          type="button"
+          className="back-url-trigger-round"
+          onClick={handleBackNavigation}
+          aria-label="Înapoi"
+          title="Înapoi"
+        >
+          <ArrowLeft size={18} strokeWidth={2.4} />
+        </button>
+      )}
+
+      {!isCheckingAuth && (
+        supabaseUser ? (
+          <button
+            type="button"
+            className="profile-url-trigger-round"
+            onClick={handleOpenProfileModal}
+            aria-label="Profil și încărcare CSV"
+            title="Profil și încărcare CSV"
+          >
+            <UserRoundPen size={18} strokeWidth={2.2} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="profile-url-trigger"
+            onClick={handleOpenProfileModal}
+          >
+            <WandSparkles size={16} strokeWidth={2} />
+            Creează librăria ta
+          </button>
+        )
+      )}
+
+      {!isCheckingAuth && isUserLoggedIn && !isExploreMode && (
+        <button
+          type="button"
+          className="sticky-add-book-btn"
+          onClick={() => {
+            if (activeShelf === 'collections') {
+              const activeUser = getActiveCollectionUserId()
+              if (activeUser && String(currentUserId) !== String(activeUser)) {
+                setCurrentUserId(String(activeUser))
+                window.history.pushState({}, '', `/${activeUser}/collections`)
+              }
+              setNewCollectionError('')
+              setShowNewCollectionInput(true)
+              window.scrollTo({ top: 0, behavior: 'smooth' })
+              return
+            }
+            const defaultShelf = SHELF_OPTIONS.some((s) => s.id === activeShelf) ? activeShelf : 'to-read'
+            setTargetShelf(defaultShelf)
+            setTargetCollectionForSearch(null)
+            setIsSearchModalOpen(true)
+            setSearchError('')
+          }}
+          aria-label={
+            activeShelf === 'collections'
+              ? 'Creează o colecție nouă'
+              : `Adaugă o carte în ${getShelfLabel(activeShelf)}`
+          }
+          title={
+            activeShelf === 'collections'
+              ? 'Creează o colecție nouă'
+              : `Adaugă o carte în ${getShelfLabel(activeShelf)}`
+          }
+        >
+          <Plus size={24} strokeWidth={2.4} />
+        </button>
+      )}
+
+      {showNewCollectionInput && (
+        <div
+          className="profile-modal-backdrop"
+          onPointerDown={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowNewCollectionInput(false)
+              setNewCollectionTitle('')
+              setNewCollectionDescription('')
+              setNewCollectionIsPrivate(false)
+              setNewCollectionError('')
+            }
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowNewCollectionInput(false)
+              setNewCollectionTitle('')
+              setNewCollectionDescription('')
+              setNewCollectionIsPrivate(false)
+              setNewCollectionError('')
+            }
+          }}
+        >
+          <div
+            className="profile-modal collection-modal"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-collection-modal-title"
+          >
+            <div className="search-modal-header">
+              <h2 id="create-collection-modal-title" className="search-modal-title">
+                Colecție nouă
+              </h2>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={() => {
+                  setShowNewCollectionInput(false)
+                  setNewCollectionTitle('')
+                  setNewCollectionDescription('')
+                  setNewCollectionIsPrivate(false)
+                  setNewCollectionError('')
+                }}
+                aria-label="Închide"
+                title="Închide"
+              >
+                <X size={18} />
+              </button>
             </div>
+
+            <form className="collections-new-form" onSubmit={handleCreateCollection}>
+              {newCollectionError && (
+                <div className="collections-modal-error" role="alert">
+                  {newCollectionError}
+                </div>
+              )}
+
+              <div className="collections-new-fields">
+                <label className="collections-modal-label">
+                  <span>Titlu colecție</span>
+                  <input
+                    type="text"
+                    className="search-input collections-modal-input"
+                    placeholder="Ex: Top SF, Cărți de vacanță..."
+                    value={newCollectionTitle}
+                    onChange={(e) => {
+                      setNewCollectionTitle(e.target.value)
+                      if (newCollectionError) setNewCollectionError('')
+                    }}
+                    autoFocus
+                    maxLength={80}
+                  />
+                </label>
+
+                <label className="collections-modal-label">
+                  <div className="collections-modal-label-row">
+                    <span>Descriere scurtă (opțional)</span>
+                    <span className="collections-new-desc-counter">
+                      {newCollectionDescription.length}/140
+                    </span>
+                  </div>
+                  <textarea
+                    className="search-input collections-modal-textarea"
+                    placeholder="O scurtă descriere a colecției (max 140 caractere)..."
+                    value={newCollectionDescription}
+                    onChange={(e) => {
+                      setNewCollectionDescription(e.target.value.slice(0, 140))
+                      if (newCollectionError) setNewCollectionError('')
+                    }}
+                    maxLength={140}
+                    rows={3}
+                  />
+                </label>
+              </div>
+
+              <div className="collections-new-footer">
+                <label className="collections-new-private-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={newCollectionIsPrivate}
+                    onChange={(e) => setNewCollectionIsPrivate(e.target.checked)}
+                  />
+                  <Lock size={15} />
+                  <span>Colecție privată (vizibilă doar pentru tine)</span>
+                </label>
+
+                <div className="collections-new-actions">
+                  <button
+                    type="button"
+                    className="collections-new-cancel-btn"
+                    onClick={() => {
+                      setShowNewCollectionInput(false)
+                      setNewCollectionTitle('')
+                      setNewCollectionDescription('')
+                      setNewCollectionIsPrivate(false)
+                      setNewCollectionError('')
+                    }}
+                  >
+                    Anulează
+                  </button>
+                  <button
+                    type="submit"
+                    className="search-submit-btn"
+                    disabled={isCreatingCollection || !newCollectionTitle.trim()}
+                  >
+                    {isCreatingCollection ? (
+                      <>
+                        <Loader2 size={16} className="spin-icon" />
+                        <span>Se creează...</span>
+                      </>
+                    ) : (
+                      'Creează colecția'
+                    )}
+                  </button>
+                </div>
+              </div>
+            </form>
           </div>
-        )}
-      </main>
-    </div>
-  )
-}
+        </div>
+      )}
+
+      {editingCollection && (
+        <div
+          className="profile-modal-backdrop"
+          onPointerDown={(e) => {
+            if (e.target === e.currentTarget) {
+              handleCloseEditCollection()
+            }
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              handleCloseEditCollection()
+            }
+          }}
+        >
+          <div
+            className="profile-modal collection-modal"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-collection-modal-title"
+          >
+            <div className="search-modal-header">
+              <h2 id="edit-collection-modal-title" className="search-modal-title">
+                Editează colecția
+              </h2>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={handleCloseEditCollection}
+                aria-label="Închide"
+                title="Închide"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form className="collections-new-form" onSubmit={handleSaveEditCollection}>
+              {editCollectionError && (
+                <div className="collections-modal-error" role="alert">
+                  {editCollectionError}
+                </div>
+              )}
+
+              <div className="collections-new-fields">
+                <label className="collections-modal-label">
+                  <span>Titlu colecție</span>
+                  <input
+                    type="text"
+                    className="search-input collections-modal-input"
+                    placeholder="Ex: Top SF, Cărți de vacanță..."
+                    value={editCollectionTitle}
+                    onChange={(e) => {
+                      setEditCollectionTitle(e.target.value)
+                      if (editCollectionError) setEditCollectionError('')
+                    }}
+                    autoFocus
+                    maxLength={80}
+                  />
+                </label>
+
+                <label className="collections-modal-label">
+                  <div className="collections-modal-label-row">
+                    <span>Descriere scurtă (opțional)</span>
+                    <span className="collections-new-desc-counter">
+                      {editCollectionDescription.length}/140
+                    </span>
+                  </div>
+                  <textarea
+                    className="search-input collections-modal-textarea"
+                    placeholder="O scurtă descriere a colecției (max 140 caractere)..."
+                    value={editCollectionDescription}
+                    onChange={(e) => {
+                      setEditCollectionDescription(e.target.value.slice(0, 140))
+                      if (editCollectionError) setEditCollectionError('')
+                    }}
+                    maxLength={140}
+                    rows={3}
+                  />
+                </label>
+              </div>
+
+              <div className="collections-new-footer">
+                <label className="collections-new-private-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={editCollectionIsPrivate}
+                    onChange={(e) => setEditCollectionIsPrivate(e.target.checked)}
+                  />
+                  <Lock size={15} />
+                  <span>Colecție privată (vizibilă doar pentru tine)</span>
+                </label>
+
+                <div className="collections-new-actions">
+                  <button
+                    type="button"
+                    className="collections-new-cancel-btn"
+                    onClick={handleCloseEditCollection}
+                  >
+                    Anulează
+                  </button>
+                  <button
+                    type="submit"
+                    className="search-submit-btn"
+                    disabled={isSavingEditCollection || !editCollectionTitle.trim()}
+                  >
+                    {isSavingEditCollection ? (
+                      <>
+                        <Loader2 size={16} className="spin-icon" />
+                        <span>Se salvează...</span>
+                      </>
+                    ) : (
+                      'Save'
+                    )}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {isSearchModalOpen && !selectedBook && (
+        <div
+          className="search-modal-backdrop"
+          onPointerDown={(e) => {
+            if (e.target === e.currentTarget) {
+              setIsSearchModalOpen(false)
+              setTargetCollectionForSearch(null)
+            }
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setIsSearchModalOpen(false)
+              setTargetCollectionForSearch(null)
+            }
+          }}
+        >
+          <div
+            className="search-modal"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="search-modal-title"
+          >
+            <div className="search-modal-header">
+              <h2 id="search-modal-title" className="search-modal-title">
+                {targetCollectionForSearch
+                  ? `Adaugă în „${targetCollectionForSearch.title}”`
+                  : `Adaugă în „${getShelfLabel(activeShelf)}”`}
+              </h2>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={() => {
+                  setIsSearchModalOpen(false)
+                  setTargetCollectionForSearch(null)
+                }}
+                aria-label="Închide căutarea"
+                title="Închide"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form className="search-modal-form" onSubmit={handleSearchSubmit}>
+              <div className="search-input-wrapper">
+                <Search size={18} className="search-input-icon" />
+                <input
+                  type="text"
+                  className="search-input"
+                  placeholder="Caută după titlu, autor sau ISBN..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  autoFocus
+                />
+                {searchQuery ? (
+                  <button
+                    type="button"
+                    className="search-input-clear-btn"
+                    onClick={() => setSearchQuery('')}
+                    aria-label="Șterge textul"
+                  >
+                    ×
+                  </button>
+                ) : null}
+              </div>
+              <button
+                type="submit"
+                className="search-submit-btn"
+                disabled={isSearching || !searchQuery.trim()}
+              >
+                {isSearching ? <Loader2 size={16} className="spin-icon" /> : 'Caută'}
+              </button>
+            </form>
+
+            {isSearching ? (
+              <div className="search-loading-state">
+                <Loader2 size={24} className="spin-icon" />
+                <span>Se caută pe Google Books...</span>
+              </div>
+            ) : searchError ? (
+              <div className="search-error-state">{searchError}</div>
+            ) : hasSearched && searchResults.length === 0 ? (
+              <div className="search-empty-state">
+                Nu am găsit nicio carte pentru „{searchQuery}”.
+              </div>
+            ) : searchResults.length > 0 ? (
+              <div className="search-results-list">
+                {searchResults.map((book) => (
+                  <div
+                    key={book.bookId}
+                    className="search-result-item"
+                    onClick={() => handleSelectSearchBook(book)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        handleSelectSearchBook(book)
+                      }
+                    }}
+                  >
+                    <div className="search-result-cover">
+                      {book.imageUrl ? (
+                        <img src={book.imageUrl} alt={book.title} />
+                      ) : (
+                        <div className="search-result-cover-placeholder">📖</div>
+                      )}
+                    </div>
+                    <div className="search-result-info">
+                      <div className="search-result-title" title={book.title}>
+                        {book.title}
+                      </div>
+                      <div className="search-result-author" title={book.author}>
+                        {book.author}
+                      </div>
+                      {book.publishedYear ? (
+                        <span className="search-result-year">
+                          {book.publishedYear}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
+    </main>
+  </div>
+)
+  }
 
 export default App

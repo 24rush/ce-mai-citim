@@ -38,8 +38,8 @@ body {
 
 .library-header h1 {
   margin: 2px 8px;
-  margin-top: 30px;
-  font-size: clamp(2.25rem, 5vw, 4rem);
+  margin-top: 35px;
+  font-size: clamp(2rem, 5vw, 4rem);
   line-height: 1;
   letter-spacing: -0.04em;
   font-weight: 900;
