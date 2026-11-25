@@ -89,7 +89,8 @@ export const updateUserProfile = async ({ userId, authUserId, displayName, descr
     executeQuery(
       `UPDATE users
        SET ${updates.join(', ')}
-       WHERE (user_id = $${userIdParam} AND $${userIdParam} <> '') OR (auth_user_id = $${authIdParam} AND $${authIdParam} <> '');`,
+       WHERE ((user_id = $${userIdParam} AND $${userIdParam} <> '') OR (auth_user_id = $${authIdParam} AND $${authIdParam} <> ''))
+         AND COALESCE(auth_user_id, '') NOT LIKE 'seed:%';`,
       values,
     ),
   )

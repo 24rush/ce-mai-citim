@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
-import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FileText, Globe, Library, Loader2, Lock, LogOut, MoreVertical, Pencil, Plus, QrCode, Save, Search, Share2, Sparkles, Star, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
+import { ArrowLeft, ArrowUpDown, Bookmark, BookOpen, Check, ChevronDown, Compass, Copy, FileText, Globe, Library, Loader2, Lock, LogOut, MoreVertical, Pencil, Plus, QrCode, Save, Search, Share2, Shield, Sparkles, Star, Trash2, Upload, UserRoundPen, UserSearch, WandSparkles, X } from 'lucide-react'
 import PeekRating from './components/PeekRating'
 import {
   buildBookShareUrl,
@@ -8,6 +8,7 @@ import {
   getFinishedBooksTotals,
   getRouteStateFromPath,
   getUserIdFromCookie,
+  isAdminPath,
   isRootPath,
   matchesBookSearch,
   matchesShelf,
@@ -21,6 +22,8 @@ import GlideSelect from './components/GlideSelect'
 import AuthModalView from './components/AuthModalView'
 import { createClient, isSupabaseConfigured } from './lib/client'
 import './App.css'
+
+const AdminPage = lazy(() => import('./components/AdminPage'))
 
 
 const SHELF_OPTIONS = [
@@ -49,9 +52,14 @@ const getShelfLabel = (shelfId) => {
 
 const BOOK_SORT_OPTIONS = [
   {
+    id: 'recently-added',
+    label: 'Recent adăugate',
+    getValue: (book) => Date.parse(book.dateAdded || 0) || 0,
+  },
+  {
     id: 'recently-read',
     label: 'Recent citite',
-    getValue: (book) => Date.parse(book.readAt || 0) || 0,
+    getValue: (book) => Date.parse(book.readAt || book.dateAdded || 0) || 0,
   },
   {
     id: 'best-rated',
@@ -169,15 +177,12 @@ const renderFeedStatement = (event, onVisitUser) => {
     )
   }
 
-  if (eventType === 'collection_created' || eventType === 'collection_updated') {
-    const isUpdate = eventType === 'collection_updated'
+  if (eventType === 'collection_updated') {
     const title = collection?.title
     return (
       <div className="feed-statement">
         {userBtn}
-        <span className="feed-statement-action">
-          {isUpdate ? 'a actualizat colecția' : 'a creat colecția'}
-        </span>
+        <span className="feed-statement-action">a actualizat colecția</span>
         {title && <span className="feed-statement-highlight">„{title}”</span>}
       </div>
     )
@@ -918,7 +923,11 @@ function App() {
     lastBookShelfRef.current = activeShelf
   }
   const [activeAuthorFilter, setActiveAuthorFilter] = useState('all')
-  const [activeBookSort, setActiveBookSort] = useState('recently-read')
+  const [activeBookSort, setActiveBookSort] = useState(() =>
+    initialRouteState.shelf && initialRouteState.shelf !== 'read'
+      ? 'recently-added'
+      : 'recently-read'
+  )
   const [bookSearchQuery, setBookSearchQuery] = useState('')
   const [currentUserId, setCurrentUserId] = useState(() => {
     if (initialRouteState.userId) return initialRouteState.userId
@@ -932,6 +941,12 @@ function App() {
     supabaseUserRef.current = supabaseUser
   }, [supabaseUser])
   const [isCheckingAuth, setIsCheckingAuth] = useState(() => isSupabaseConfigured())
+  const [isAdminRoute, setIsAdminRoute] = useState(() => isAdminPath(window.location.pathname))
+  const [isAdminUser, setIsAdminUser] = useState(false)
+  const [isVerifyingAdmin, setIsVerifyingAdmin] = useState(() => isSupabaseConfigured())
+  const supabaseAccessTokenRef = useRef('')
+  const verifiedAdminAuthIdRef = useRef(null)
+  const getSupabaseAccessToken = useCallback(() => supabaseAccessTokenRef.current, [])
   const [showProfileModal, setShowProfileModal] = useState(false)
   const [displayNameInput, setDisplayNameInput] = useState('')
   const [descriptionInput, setDescriptionInput] = useState('')
@@ -1204,7 +1219,7 @@ function App() {
       .filter((col) => Array.isArray(col.books) && col.books.length > 0)
       .map((col) => ({
         id: `col-${col.id}`,
-        eventType: 'collection_created',
+        eventType: 'collection_updated',
         createdAt: col.updatedAt || col.createdAt,
         user: {
           userId: col.userId,
@@ -1603,8 +1618,13 @@ function App() {
       supabase.auth
         .getSession()
         .then(async ({ data: { session } }) => {
+          supabaseAccessTokenRef.current = session?.access_token || ''
           const user = session?.user ?? null
-          setSupabaseUser(user)
+          setSupabaseUser((prev) => {
+            if (!prev && !user) return prev
+            if (prev && user && prev.id === user.id && prev.email === user.email) return prev
+            return user
+          })
           if (user && syncedAuthUserIdRef.current !== user.id) {
             syncedAuthUserIdRef.current = user.id
             await syncUserProfileWithServer(user)
@@ -1619,17 +1639,25 @@ function App() {
 
       const {
         data: { subscription },
-      } = supabase.auth.onAuthStateChange(async (event, session) => {
+      } = supabase.auth.onAuthStateChange((event, session) => {
+        supabaseAccessTokenRef.current = session?.access_token || ''
         const user = session?.user ?? null
-        setSupabaseUser(user)
+        setSupabaseUser((prev) => {
+          if (!prev && !user) return prev
+          if (prev && user && prev.id === user.id && prev.email === user.email) return prev
+          return user
+        })
         if (!user) {
           syncedAuthUserIdRef.current = null
+          verifiedAdminAuthIdRef.current = null
           setIsCheckingAuth(false)
           return
         }
-        if (event === 'SIGNED_IN' || syncedAuthUserIdRef.current !== user.id) {
+        if (syncedAuthUserIdRef.current !== user.id) {
           syncedAuthUserIdRef.current = user.id
-          await syncUserProfileWithServer(user, { hideModal: event === 'SIGNED_IN' })
+          syncUserProfileWithServer(user, { hideModal: event === 'SIGNED_IN' })
+        } else if (event === 'SIGNED_IN') {
+          setShowProfileModal(false)
         }
         setIsCheckingAuth(false)
       })
@@ -1648,6 +1676,8 @@ function App() {
       const supabase = createClient()
       await supabase.auth.signOut()
       syncedAuthUserIdRef.current = null
+      supabaseAccessTokenRef.current = ''
+      verifiedAdminAuthIdRef.current = null
       loadedUserIdRef.current = null
       booksByUserIdCacheRef.current.clear()
       collectionsByUserIdCacheRef.current.clear()
@@ -1656,6 +1686,8 @@ function App() {
         document.cookie = 'userId=; path=/; max-age=0; SameSite=Lax'
       }
       setSupabaseUser(null)
+      setIsAdminUser(false)
+      setIsAdminRoute(false)
       setCookieUserId('')
       setCurrentUserId('')
       setUsername('')
@@ -1700,6 +1732,95 @@ function App() {
     }
   }, [])
 
+  const supabaseUserId = supabaseUser?.id || ''
+
+  useEffect(() => {
+    if (isCheckingAuth) return undefined
+    if (!supabaseUserId) {
+      verifiedAdminAuthIdRef.current = null
+      setIsAdminUser(false)
+      setIsVerifyingAdmin(false)
+      return undefined
+    }
+
+    if (verifiedAdminAuthIdRef.current === supabaseUserId) {
+      setIsVerifyingAdmin(false)
+      return undefined
+    }
+
+    let cancelled = false
+    setIsVerifyingAdmin(true)
+
+    const resolveToken = supabaseAccessTokenRef.current
+      ? Promise.resolve(supabaseAccessTokenRef.current)
+      : createClient()
+        .auth.getSession()
+        .then(({ data }) => {
+          const tok = data?.session?.access_token || ''
+          supabaseAccessTokenRef.current = tok
+          return tok
+        })
+
+    resolveToken
+      .then((token) => {
+        if (!token) return null
+        return fetch('/api/admin?check=true', {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-cache',
+        })
+      })
+      .then(async (res) => {
+        if (!res) return { verified: false, isAdmin: false }
+        const json = res.ok ? await res.json().catch(() => null) : null
+        return {
+          verified: res.status === 200 || res.status === 403,
+          isAdmin: Boolean(res.ok && json?.isAdmin),
+        }
+      })
+      .then(({ verified, isAdmin }) => {
+        if (!cancelled) {
+          if (verified) {
+            verifiedAdminAuthIdRef.current = supabaseUserId
+          }
+          setIsAdminUser(isAdmin)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setIsAdminUser(false)
+      })
+      .finally(() => {
+        if (!cancelled) setIsVerifyingAdmin(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [supabaseUserId, isCheckingAuth])
+
+  useEffect(() => {
+    if (!isAdminRoute || isCheckingAuth || isVerifyingAdmin) return
+    if (!supabaseUser || !isAdminUser) {
+      window.history.replaceState({}, '', '/')
+      setIsAdminRoute(false)
+      setIsExploreMode(true)
+    }
+  }, [isAdminRoute, isCheckingAuth, isVerifyingAdmin, supabaseUser, isAdminUser])
+
+  const handleOpenAdminPage = () => {
+    setShowProfileModal(false)
+    window.history.pushState({}, '', '/admin')
+    setIsAdminRoute(true)
+  }
+
+  const handleExitAdminPage = () => {
+    hasLoadedFeedRef.current = false
+    hasLoadedExploreCollectionsRef.current = false
+    setCollectionsRefreshTrigger((prev) => prev + 1)
+    window.history.pushState({}, '', '/')
+    setIsAdminRoute(false)
+    setIsExploreMode(true)
+  }
+
   useEffect(() => {
     const syncRouteState = () => {
       inAppNavCountRef.current = Math.max(0, inAppNavCountRef.current - 1)
@@ -1708,6 +1829,12 @@ function App() {
       } catch {
         // ignore
       }
+
+      if (isAdminPath(window.location.pathname)) {
+        setIsAdminRoute(true)
+        return
+      }
+      setIsAdminRoute(false)
 
       const { userId, shelf, bookId } = getRouteStateFromPath(window.location.pathname)
 
@@ -2423,6 +2550,18 @@ function App() {
         return valueB - valueA
       }
 
+      const addedDateA = Date.parse(bookA.dateAdded || 0) || 0
+      const addedDateB = Date.parse(bookB.dateAdded || 0) || 0
+      if (addedDateA !== addedDateB) {
+        return addedDateB - addedDateA
+      }
+
+      const updatedA = Date.parse(bookA.updatedAt || 0) || 0
+      const updatedB = Date.parse(bookB.updatedAt || 0) || 0
+      if (updatedA !== updatedB) {
+        return updatedB - updatedA
+      }
+
       const readDateA = Date.parse(bookA.readAt || 0) || 0
       const readDateB = Date.parse(bookB.readAt || 0) || 0
 
@@ -3075,6 +3214,85 @@ function App() {
     return false
   }
 
+  const syncSavedBookIntoLibrary = (ownerUserId, sourceBook, savedShelfName, apiData = {}) => {
+    const ownerStr = String(ownerUserId || '').trim()
+    const bookId = String(sourceBook?.bookId || sourceBook?.id || '').trim()
+    if (!ownerStr || !bookId) return
+
+    const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '/')
+    const finalDateAdded = apiData?.dateAdded || todayStr
+    const finalDateRead =
+      apiData?.dateRead || (savedShelfName === 'read' ? todayStr : '')
+    const finalUpdatedAt = apiData?.updatedAt || new Date().toISOString()
+
+    const applyToBookList = (list = []) => {
+      const exists = list.some(
+        (b) =>
+          String(b.bookId || '') === bookId ||
+          String(b.id || '') === bookId ||
+          (sourceBook.id && String(b.id) === String(sourceBook.id)),
+      )
+      if (exists) {
+        return list.map((b) => {
+          const isMatch =
+            String(b.bookId || '') === bookId ||
+            String(b.id || '') === bookId ||
+            (sourceBook.id && String(b.id) === String(sourceBook.id))
+          return isMatch
+            ? {
+              ...b,
+              bookshelves: savedShelfName,
+              dateAdded: finalDateAdded,
+              'Date Added': finalDateAdded,
+              readAt: finalDateRead,
+              'Date Read': finalDateRead,
+              updatedAt: finalUpdatedAt,
+            }
+            : b
+        })
+      }
+
+      const normalized = normalizeCsvBook(
+        {
+          ...sourceBook,
+          'Book Id': bookId,
+          Title: sourceBook.title || '',
+          Author: sourceBook.author || '',
+          ISBN: sourceBook.isbn || '',
+          'Number of Pages': sourceBook.pages || '',
+          'Original Publication Year': sourceBook.publishedYear || '',
+          Publisher: sourceBook.publisher || '',
+          Binding: sourceBook.binding || '',
+          Bookshelves: savedShelfName,
+          'Date Added': finalDateAdded,
+          'Date Read': finalDateRead,
+          updatedAt: finalUpdatedAt,
+          description: sourceBook.description || '',
+          mainCategory: sourceBook.mainCategory || '',
+          imageUrl: sourceBook.imageUrl || sourceBook.coverUrl || '',
+        },
+        0,
+      )
+      return [normalized, ...list]
+    }
+
+    if (booksByUserIdCacheRef.current.has(ownerStr)) {
+      const cached = booksByUserIdCacheRef.current.get(ownerStr)
+      if (cached && Array.isArray(cached.books)) {
+        booksByUserIdCacheRef.current.set(ownerStr, {
+          ...cached,
+          books: applyToBookList(cached.books),
+        })
+      }
+    }
+
+    if (!currentUserId || String(currentUserId) === ownerStr) {
+      setBooks((prevBooks) => applyToBookList(prevBooks))
+    }
+
+    setBooksFetchTrigger((prev) => prev + 1)
+  }
+
   const handleQuickAddFeedBook = async (book, e) => {
     if (e) {
       e.stopPropagation()
@@ -3144,8 +3362,10 @@ function App() {
           title: book.title || '',
           author: book.author || '',
           isbn: book.isbn || '',
+          dateAdded: data?.dateAdded || '',
         },
       }))
+      syncSavedBookIntoLibrary(activeUserId, book, savedShelfName, data)
     } catch (err) {
       console.error('Error quick-adding book to to-read:', err)
       setUserShelvesByBookId((prev) => {
@@ -3158,15 +3378,37 @@ function App() {
     }
   }
 
-  const handleOpenFeedBook = (book) => {
-    if (!book) return
-    const normalizedBook = enrichBookWithCache({
-      ...book,
-      id: book.id || book.bookId,
-      bookId: book.bookId || book.id,
-      imageUrl: book.imageUrl || book.coverUrl,
-      coverUrl: book.coverUrl || book.imageUrl,
+  const normalizeFeedBookItem = (b) =>
+    enrichBookWithCache({
+      ...b,
+      id: b.id || b.bookId,
+      bookId: b.bookId || b.id,
+      imageUrl: b.imageUrl || b.coverUrl,
+      coverUrl: b.coverUrl || b.imageUrl,
     })
+
+  const handleOpenFeedBook = (book, event = null) => {
+    if (!book) return
+    const normalizedBook = normalizeFeedBookItem(book)
+
+    const eventBooks = Array.isArray(event?.books) && event.books.length > 0
+      ? event.books
+      : [book]
+
+    if (event && (event.collection || eventBooks.length > 1)) {
+      const colId = event.collection?.collectionId || event.collection?.id || `feed-${event.id}`
+      setActiveModalCollection({
+        id: String(colId),
+        collectionId: String(colId),
+        userId: event.user?.userId || '',
+        title: event.collection?.title || '',
+        description: event.collection?.description || '',
+        books: eventBooks.map(normalizeFeedBookItem),
+      })
+    } else {
+      setActiveModalCollection(null)
+    }
+
     setSelectedBook(normalizedBook)
     setError('')
   }
@@ -3264,9 +3506,11 @@ function App() {
       } else {
         setShowRatingPopup(false)
       }
+      const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '/')
+      const todayAddedFormatted = data.dateAdded || todayStr
       const todayFormatted =
         data.dateRead ||
-        (savedShelfName === 'read' ? new Date().toISOString().slice(0, 10).replace(/-/g, '/') : '')
+        (savedShelfName === 'read' ? todayStr : '')
       setUserShelvesByBookId((prev) => {
         const entry = {
           ...(prev[bookId] || {}),
@@ -3275,6 +3519,7 @@ function App() {
           title: selectedBook.title,
           author: selectedBook.author,
           isbn: selectedBook.isbn,
+          dateAdded: todayAddedFormatted,
           dateRead: todayFormatted,
         }
         const next = {
@@ -3286,41 +3531,7 @@ function App() {
         }
         return next
       })
-      setBooks((prevBooks) => {
-        const bookExists = prevBooks.some(
-          (b) =>
-            String(b.bookId || '') === bookId ||
-            String(b.id || '') === bookId ||
-            (selectedBook.id && String(b.id) === String(selectedBook.id))
-        )
-        if (bookExists) {
-          return prevBooks.map((b) => {
-            const isMatch =
-              String(b.bookId || '') === bookId ||
-              String(b.id || '') === bookId ||
-              (selectedBook.id && String(b.id) === String(selectedBook.id))
-            return isMatch
-              ? {
-                ...b,
-                bookshelves: savedShelfName,
-                readAt: todayFormatted,
-                'Date Read': todayFormatted,
-              }
-              : b
-          })
-        }
-        return [
-          {
-            ...selectedBook,
-            id: selectedBook.id || bookId,
-            bookId,
-            bookshelves: savedShelfName,
-            readAt: todayFormatted,
-            'Date Read': todayFormatted,
-          },
-          ...prevBooks,
-        ]
-      })
+      syncSavedBookIntoLibrary(activeUser, selectedBook, savedShelfName, data)
       setSelectedBook((prev) => {
         if (!prev) return prev
         const isMatch =
@@ -3331,13 +3542,13 @@ function App() {
         return {
           ...prev,
           bookshelves: savedShelfName,
+          dateAdded: todayAddedFormatted,
+          'Date Added': todayAddedFormatted,
           readAt: todayFormatted,
           'Date Read': todayFormatted,
+          updatedAt: data.updatedAt || new Date().toISOString(),
         }
       })
-      if (cookieUserId) {
-        setBooksFetchTrigger((prev) => prev + 1)
-      }
     } catch (err) {
       console.error('Error saving book to shelf:', err)
     } finally {
@@ -3748,8 +3959,10 @@ function App() {
                     title: bookToSave.title,
                     author: bookToSave.author,
                     isbn: bookToSave.isbn,
+                    dateAdded: data.dateAdded || '',
                   },
                 }))
+                syncSavedBookIntoLibrary(activeUser, bookToSave, savedShelfName, data)
                 showModalToast('Salvat pe raftul De citit!')
               }
             })
@@ -4428,6 +4641,56 @@ function App() {
     (!isVisitingOtherUser && supabaseUser?.user_metadata?.display_name) ||
     ''
 
+  if (isAdminRoute) {
+    if (isCheckingAuth || isVerifyingAdmin) {
+      return (
+        <div
+          style={{
+            minHeight: '100vh',
+            background: '#0b0a0f',
+            color: '#a1a1aa',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 10,
+          }}
+        >
+          <Loader2 size={20} className="animate-spin" />
+          <span>Se verifică accesul...</span>
+        </div>
+      )
+    }
+
+    if (isAdminUser && supabaseUser) {
+      return (
+        <Suspense
+          fallback={
+            <div
+              style={{
+                minHeight: '100vh',
+                background: '#0b0a0f',
+                color: '#a1a1aa',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 10,
+              }}
+            >
+              <Loader2 size={20} className="animate-spin" />
+              <span>Se încarcă panoul de administrare...</span>
+            </div>
+          }
+        >
+          <AdminPage
+            adminEmail={supabaseUser.email || ''}
+            getAccessToken={getSupabaseAccessToken}
+            onBackToApp={handleExitAdminPage}
+          />
+        </Suspense>
+      )
+    }
+  }
+
   return (
     <div style={{ position: 'relative', minHeight: '100vh', width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
       <main className="app-shell" style={{ position: 'relative', zIndex: 1, maxWidth: '100%' }}>
@@ -4447,11 +4710,11 @@ function App() {
           >
             {!isCheckingAuth && isVisitingOtherUser && username ? (
               <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
-                Ce mai citește <span className="text-violet-300">{username}</span>
+                Ce mai citim · <span className="text-violet-300">{username}</span>
               </h1>
             ) : !isCheckingAuth && !isVisitingOtherUser && isUserLoggedIn && loggedInUserName ? (
               <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
-                Ce mai citește <span className="text-violet-300">{loggedInUserName}</span>
+                Ce mai citim · <span className="text-violet-300">{loggedInUserName}</span>
               </h1>
             ) : (
               <h1 className="text-4xl font-black tracking-[-0.04em] text-slate-50 md:text-6xl">
@@ -5229,6 +5492,24 @@ function App() {
                       </div>
                     ) : null}
 
+                    {isAdminUser ? (
+                      <button
+                        type="button"
+                        className="profile-modal-logout-btn-bottom"
+                        style={{
+                          marginBottom: 8,
+                          color: '#a7f3d0',
+                          borderColor: 'rgba(16, 185, 129, 0.3)',
+                          background: 'rgba(16, 185, 129, 0.08)',
+                        }}
+                        onClick={handleOpenAdminPage}
+                        title="Deschide panoul de administrare"
+                      >
+                        <Shield size={16} />
+                        <span>Administrare utilizatori</span>
+                      </button>
+                    ) : null}
+
                     <button
                       type="button"
                       className="profile-modal-logout-btn-bottom"
@@ -5301,7 +5582,7 @@ function App() {
                                   <BookCoverCard
                                     book={b}
                                     isPriority={eventIndex < 2 && bIdx < 3}
-                                    onClick={() => handleOpenFeedBook(b)}
+                                    onClick={() => handleOpenFeedBook(b, event)}
                                   />
                                   <button
                                     type="button"
@@ -5350,14 +5631,14 @@ function App() {
                           <BookCoverCard
                             book={singleBook}
                             isPriority={eventIndex < 4}
-                            onClick={() => handleOpenFeedBook(singleBook)}
+                            onClick={() => handleOpenFeedBook(singleBook, event)}
                           />
                         </div>
 
                         <div className="feed-single-book-info">
                           <h3
                             className="feed-book-title"
-                            onClick={() => handleOpenFeedBook(singleBook)}
+                            onClick={() => handleOpenFeedBook(singleBook, event)}
                             title={singleBook.title}
                           >
                             {singleBook.title || 'Fără titlu'}

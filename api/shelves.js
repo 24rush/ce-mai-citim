@@ -93,14 +93,15 @@ export const saveBookToShelf = async ({
       INSERT INTO user_shelves (
         user_id, book_id, bookshelves, my_rating, date_added, date_read, updated_at
       )
-      VALUES ($1, $2, $3, $4, NOW(), CASE WHEN $3 = 'read' THEN CURRENT_DATE ELSE NULL END, NOW())
+      VALUES ($1, $2, $3, $4, CURRENT_DATE, CASE WHEN $3 = 'read' THEN CURRENT_DATE ELSE NULL END, NOW())
       ON CONFLICT (user_id, book_id)
       DO UPDATE SET
         bookshelves = EXCLUDED.bookshelves,
         my_rating = EXCLUDED.my_rating,
+        date_added = CURRENT_DATE,
         date_read = CASE WHEN EXCLUDED.bookshelves = 'read' THEN CURRENT_DATE ELSE NULL END,
         updated_at = NOW()
-      RETURNING user_id, book_id, bookshelves, my_rating, TO_CHAR(date_read, 'YYYY/MM/DD') AS date_read;
+      RETURNING user_id, book_id, bookshelves, my_rating, TO_CHAR(date_added, 'YYYY/MM/DD') AS date_added, TO_CHAR(date_read, 'YYYY/MM/DD') AS date_read, updated_at;
     `.trim()
     shelfParams = [cleanUserId, cleanBookId, cleanShelf, cleanRating]
   } else {
@@ -108,13 +109,14 @@ export const saveBookToShelf = async ({
       INSERT INTO user_shelves (
         user_id, book_id, bookshelves, date_added, date_read, updated_at
       )
-      VALUES ($1, $2, $3, NOW(), CASE WHEN $3 = 'read' THEN CURRENT_DATE ELSE NULL END, NOW())
+      VALUES ($1, $2, $3, CURRENT_DATE, CASE WHEN $3 = 'read' THEN CURRENT_DATE ELSE NULL END, NOW())
       ON CONFLICT (user_id, book_id)
       DO UPDATE SET
         bookshelves = EXCLUDED.bookshelves,
+        date_added = CURRENT_DATE,
         date_read = CASE WHEN EXCLUDED.bookshelves = 'read' THEN CURRENT_DATE ELSE NULL END,
         updated_at = NOW()
-      RETURNING user_id, book_id, bookshelves, my_rating, TO_CHAR(date_read, 'YYYY/MM/DD') AS date_read;
+      RETURNING user_id, book_id, bookshelves, my_rating, TO_CHAR(date_added, 'YYYY/MM/DD') AS date_added, TO_CHAR(date_read, 'YYYY/MM/DD') AS date_read, updated_at;
     `.trim()
     shelfParams = [cleanUserId, cleanBookId, cleanShelf]
   }
@@ -122,6 +124,7 @@ export const saveBookToShelf = async ({
   const rows = await executeQuery(shelfSql, shelfParams)
   const finalShelf = rows?.[0]?.bookshelves || cleanShelf
   const finalRating = Number(rows?.[0]?.my_rating) || (rating !== undefined && rating !== null ? Number(rating) : 0)
+  const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '/')
 
   await recordFeedEvent({
     userId: cleanUserId,
@@ -140,7 +143,9 @@ export const saveBookToShelf = async ({
     bookId: cleanBookId,
     shelf: finalShelf,
     myRating: finalRating,
-    dateRead: rows?.[0]?.date_read || (cleanShelf === 'read' ? new Date().toISOString().slice(0, 10).replace(/-/g, '/') : ''),
+    dateAdded: rows?.[0]?.date_added || todayStr,
+    dateRead: rows?.[0]?.date_read || (cleanShelf === 'read' ? todayStr : ''),
+    updatedAt: rows?.[0]?.updated_at || new Date().toISOString(),
   }
 }
 

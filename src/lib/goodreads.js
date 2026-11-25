@@ -1,4 +1,4 @@
-const RESERVED_SEGMENTS = new Set(['read', 'to-read', 'currently-reading', 'did-not-finish', 'collections', 'api', 'goodreads'])
+const RESERVED_SEGMENTS = new Set(['read', 'to-read', 'currently-reading', 'did-not-finish', 'collections', 'api', 'goodreads', 'admin'])
 
 export const USER_ID_COOKIE_NAME = 'userId'
 
@@ -50,6 +50,11 @@ export const SHELF_IDS = ['read', 'to-read', 'currently-reading', 'did-not-finis
 export const isRootPath = (pathname = '') => {
   const normalized = String(pathname || '').trim().replace(/\/+$/, '')
   return normalized === '' || normalized === '/'
+}
+
+export const isAdminPath = (pathname = '') => {
+  const normalized = String(pathname || '').trim().replace(/\/+$/, '').toLowerCase()
+  return normalized === '/admin'
 }
 
 export const getRouteStateFromPath = (pathname = typeof window !== 'undefined' ? window.location.pathname : '') => {
@@ -274,6 +279,7 @@ export const normalizeCsvBook = (record = {}, index = 0) => {
   )
   const readAt = cleanCsvValue(getField('Date Read', 'dateRead', 'date_read', 'readAt', 'finishedAt'))
   const dateAdded = cleanCsvValue(getField('Date Added', 'dateAdded', 'date_added'))
+  const updatedAt = cleanCsvValue(getField('updatedAt', 'updated_at'))
   const rawBookshelves = cleanCsvValue(getField('Bookshelves', 'bookshelves'))
   const rawPositions = cleanCsvValue(
     getField('Bookshelves with positions', 'bookshelves with positions', 'bookshelves_with_positions'),
@@ -332,6 +338,7 @@ export const normalizeCsvBook = (record = {}, index = 0) => {
     readAt,
     finishedAt: cleanCsvValue(record.finishedAt) || readAt,
     dateAdded,
+    updatedAt,
     bookshelves,
     review,
     spoiler,

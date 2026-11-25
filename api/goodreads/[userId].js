@@ -20,6 +20,7 @@ export const USER_BOOKS_SQL = `
     b.main_category,
     TO_CHAR(us.date_read, 'YYYY/MM/DD') AS date_read,
     TO_CHAR(us.date_added, 'YYYY/MM/DD') AS date_added,
+    us.updated_at,
     us.bookshelves,
     us.my_review,
     us.spoiler,
@@ -29,7 +30,7 @@ export const USER_BOOKS_SQL = `
   LEFT JOIN books b ON b.book_id = us.book_id
   LEFT JOIN covers c ON c.isbn = b.isbn AND b.isbn IS NOT NULL AND b.isbn <> ''
   WHERE u.user_id = $1
-  ORDER BY us.date_read DESC NULLS LAST, us.date_added DESC NULLS LAST;
+  ORDER BY us.date_added DESC NULLS LAST, us.updated_at DESC NULLS LAST, us.date_read DESC NULLS LAST;
 `.trim()
 
 export const mapRowToBook = (row, index) =>
@@ -48,6 +49,7 @@ export const mapRowToBook = (row, index) =>
       mainCategory: row.main_category,
       'Date Read': row.date_read,
       'Date Added': row.date_added,
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : '',
       Bookshelves: row.bookshelves ?? '',
       'My Review': row.my_review,
       Spoiler: row.spoiler,

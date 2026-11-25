@@ -10,6 +10,7 @@ import {
   matchesShelf,
   getFinishedBooksTotals,
   getRouteStateFromPath,
+  isAdminPath,
   isRootPath,
   cleanCsvValue,
   convertIsbn10To13,
@@ -52,6 +53,7 @@ import feedHandler, {
   getFeedEvents,
   ensureFeedEventsTable,
 } from '../../api/feed.js'
+import adminHandler from '../../api/admin.js'
 
 const createMockRes = () => {
   const res = {
@@ -3311,7 +3313,7 @@ test('getFeedEvents returns formatted events with limit 20 and filters private c
       id: '9',
       user_id: 'user5678',
       username: 'Elena',
-      event_type: 'collection_created',
+      event_type: 'collection_updated',
       book_id: null,
       book_title: null,
       book_author: null,
@@ -3366,11 +3368,26 @@ test('getFeedEvents returns formatted events with limit 20 and filters private c
   assert.equal(ev1.book.title, 'Dune')
   assert.equal(ev1.metadata.rating, 5)
 
-  // Event 2: collection_created
+  // Event 2: collection_updated
   const ev2 = result.events[1]
-  assert.equal(ev2.eventType, 'collection_created')
+  assert.equal(ev2.eventType, 'collection_updated')
   assert.equal(ev2.collection.collectionId, '42')
   assert.equal(ev2.collection.title, 'Sci-Fi Classics')
+
+  // Verify createCollection does NOT emit a feed event
+  const createColQueries = []
+  await createCollection({
+    userId: 'user5678',
+    title: 'Empty New Collection',
+    queryFn: async (sql, vals) => {
+      createColQueries.push(sql)
+      return [{ collection_id: 99, user_id: 'user5678', title: vals[1], is_private: false }]
+    },
+  })
+  assert.equal(
+    createColQueries.some((q) => q.includes('INSERT INTO feed_events')),
+    false,
+  )
 
   // Event 3: csv_upload
   const ev3 = result.events[2]
@@ -3415,6 +3432,347 @@ test('feed endpoint handles GET requests, sets no-store, and rejects non-GET met
   await feedHandler(reqPost, resPost)
   assert.equal(resPost.statusCode, 405)
 })
+
+test('isAdminPath identifies /admin and getRouteStateFromPath treats admin as reserved', () => {
+  assert.equal(isAdminPath('/admin'), true)
+  assert.equal(isAdminPath('/admin/'), true)
+  assert.equal(isAdminPath('/ADMIN'), true)
+  assert.equal(isAdminPath('/'), false)
+  assert.equal(isAdminPath('/user1234'), false)
+
+  const route = getRouteStateFromPath('/admin')
+  assert.equal(route.userId, '')
+})
+
+test('admin endpoint enforces ADMIN_EMAIL and Bearer token authentication', async () => {
+  // 1. Missing token -> 401
+  const resNoToken = createMockRes()
+  await adminHandler(
+    {
+      method: 'GET',
+      adminEmail: 'boss@example.com',
+      headers: {},
+    },
+    resNoToken,
+  )
+  assert.equal(resNoToken.statusCode, 401)
+
+  // 2. Non-admin email -> 403
+  const resForbidden = createMockRes()
+  await adminHandler(
+    {
+      method: 'GET',
+      adminEmail: 'boss@example.com',
+      headers: { authorization: 'Bearer valid-other-token' },
+      verifyAuthToken: async () => ({ id: 'auth-other', email: 'visitor@example.com' }),
+    },
+    resForbidden,
+  )
+  assert.equal(resForbidden.statusCode, 403)
+
+  // 3. Matching ADMIN_EMAIL (case-insensitive) -> 200 on ?check=true
+  const resAllowed = createMockRes()
+  await adminHandler(
+    {
+      method: 'GET',
+      query: { check: 'true' },
+      adminEmail: 'Boss@Example.com',
+      headers: { authorization: 'Bearer valid-admin-token' },
+      verifyAuthToken: async () => ({ id: 'auth-admin', email: 'boss@example.com' }),
+    },
+    resAllowed,
+  )
+  assert.equal(resAllowed.statusCode, 200)
+  assert.equal(resAllowed.payload.isAdmin, true)
+})
+
+test('admin endpoint creates seed users with seed: auth_user_id, manages shelves/collections, and blocks modifying real users', async () => {
+  const usersStore = new Map([
+    [
+      'real1234',
+      {
+        user_id: 'real1234',
+        display_name: 'Real Person',
+        description: '',
+        auth_user_id: 'uuid-real-supabase-user',
+        last_access: '2026-11-25T08:00:00Z',
+      },
+    ],
+  ])
+  const shelfStore = []
+  const feedStore = []
+
+  const mockDbQuery = async (sql, values = []) => {
+    if (sql.includes('INSERT INTO users') && sql.includes('RETURNING user_id')) {
+      const [userId, displayName, description, authUserId] = values
+      const row = {
+        user_id: userId,
+        display_name: displayName,
+        description,
+        auth_user_id: authUserId,
+        last_access: '2026-11-25T08:30:00Z',
+      }
+      usersStore.set(userId, row)
+      return [row]
+    }
+
+    if (sql.includes("WHERE user_id = $1 AND auth_user_id LIKE 'seed:%'")) {
+      const candidate = usersStore.get(values[0])
+      if (candidate && String(candidate.auth_user_id).startsWith('seed:')) {
+        if (sql.startsWith('DELETE FROM users')) {
+          usersStore.delete(values[0])
+        }
+        return [candidate]
+      }
+      return []
+    }
+
+    if (sql.includes("WHERE u.auth_user_id LIKE 'seed:%'")) {
+      return [...usersStore.values()]
+        .filter((u) => String(u.auth_user_id).startsWith('seed:'))
+        .map((u) => ({
+          ...u,
+          total_books: shelfStore.filter((s) => s.user_id === u.user_id).length,
+          read_count: shelfStore.filter((s) => s.user_id === u.user_id && s.shelf === 'read').length,
+          to_read_count: 0,
+          reading_count: 0,
+          dnf_count: 0,
+          collection_count: 0,
+        }))
+    }
+
+    if (sql.includes('INSERT INTO books')) {
+      return [{ book_id: values[0] }]
+    }
+
+    if (sql.includes('INSERT INTO user_shelves')) {
+      const [userId, bookId, shelf] = values
+      shelfStore.push({ user_id: userId, book_id: bookId, shelf })
+      return [{ user_id: userId, book_id: bookId, bookshelves: shelf, my_rating: 0, date_read: '2026/11/25' }]
+    }
+
+    if (sql.includes('INSERT INTO feed_events')) {
+      feedStore.push({ userId: values[0], eventType: values[1], bookId: values[2] })
+      return [{ id: feedStore.length }]
+    }
+
+    return []
+  }
+
+  const makeAdminReq = (method, extra = {}) => ({
+    method,
+    adminEmail: 'admin@goodreads-lib.local',
+    headers: { authorization: 'Bearer admin-jwt' },
+    verifyAuthToken: async () => ({ id: 'admin-uuid', email: 'admin@goodreads-lib.local' }),
+    dbQuery: mockDbQuery,
+    ...extra,
+  })
+
+  // 1. Create seed user -> no Set-Cookie header, auth_user_id starts with 'seed:'
+  const resCreate = createMockRes()
+  await adminHandler(
+    makeAdminReq('POST', {
+      body: { action: 'create_user', displayName: 'Elena Cititoarea', description: 'Pasionată de SF' },
+    }),
+    resCreate,
+  )
+  assert.equal(resCreate.statusCode, 201)
+  assert.equal(resCreate.headers['Set-Cookie'], undefined)
+  const createdUserId = resCreate.payload.user.userId
+  assert.match(createdUserId, /^[a-zA-Z0-9]{8}$/)
+  assert.equal(usersStore.get(createdUserId).auth_user_id, `seed:${createdUserId}`)
+
+  // 2. Add book to seed user's shelf -> succeeds and automatically emits feed_event
+  const resSaveBook = createMockRes()
+  await adminHandler(
+    makeAdminReq('POST', {
+      body: {
+        action: 'save_book',
+        userId: createdUserId,
+        bookId: 'gb_dune',
+        shelf: 'read',
+        book: { title: 'Dune', author: 'Frank Herbert', isbn: '9780441172719' },
+      },
+    }),
+    resSaveBook,
+  )
+  assert.equal(resSaveBook.statusCode, 200)
+  assert.equal(shelfStore.length, 1)
+  assert.equal(feedStore.length, 1)
+  assert.equal(feedStore[0].eventType, 'shelf_add')
+
+  // 3. Attempting to modify or delete a REAL user fails with 404
+  const resModifyReal = createMockRes()
+  await adminHandler(
+    makeAdminReq('POST', {
+      body: { action: 'delete_user', userId: 'real1234' },
+    }),
+    resModifyReal,
+  )
+  assert.equal(resModifyReal.statusCode, 404)
+  assert.equal(usersStore.has('real1234'), true)
+
+  // 4. Seed user cannot be claimed via /api/profile when someone signs up passing existingUserId
+  const resAttemptClaim = createMockRes()
+  await profileHandler(
+    {
+      method: 'POST',
+      headers: { host: 'localhost:3000' },
+      body: {
+        authUserId: 'new-visitor-uuid',
+        email: 'visitor@example.com',
+        existingUserId: createdUserId,
+      },
+      dbQuery: async (sql, values = []) => {
+        if (sql.includes('WHERE auth_user_id = $1')) return []
+        if (sql.includes('WHERE user_id = $1')) return [usersStore.get(values[0])]
+        return []
+      },
+    },
+    resAttemptClaim,
+  )
+  assert.equal(resAttemptClaim.statusCode, 200)
+  assert.notEqual(resAttemptClaim.payload.userId, createdUserId)
+})
+
+test('feed merges same-day collection_updated events for the same user and collection', async () => {
+  const capturedWrites = []
+  await recordFeedEvent({
+    userId: 'user1234',
+    eventType: 'collection_updated',
+    collectionId: 42,
+    bookId: 'gb_book2',
+    metadata: { action: 'book_added' },
+    queryFn: async (sql, values) => {
+      capturedWrites.push({ sql, values })
+      return [{ id: 15, user_id: values[0], event_type: values[1], collection_id: values[3] }]
+    },
+  })
+
+  assert.equal(capturedWrites.length, 1)
+  assert.match(capturedWrites[0].sql, /WITH updated_existing AS/)
+  assert.match(capturedWrites[0].sql, /AND collection_id = \$4/)
+  assert.equal(capturedWrites[0].values[3], 42)
+
+  // Also verify read-time deduplication collapses same-day duplicates while keeping different days
+  const mockRows = [
+    {
+      id: '22',
+      user_id: 'user1234',
+      username: 'Alex',
+      event_type: 'collection_updated',
+      collection_id: '42',
+      collection_title: 'Top SF',
+      collection_is_private: false,
+      metadata: { title: 'Top SF' },
+      created_at: '2026-11-25T18:30:00Z',
+    },
+    {
+      id: '21',
+      user_id: 'user1234',
+      username: 'Alex',
+      event_type: 'collection_updated',
+      collection_id: '42',
+      collection_title: 'Top SF',
+      collection_is_private: false,
+      metadata: { title: 'Top SF' },
+      created_at: '2026-11-25T10:15:00Z',
+    },
+    {
+      id: '15',
+      user_id: 'user1234',
+      username: 'Alex',
+      event_type: 'collection_updated',
+      collection_id: '42',
+      collection_title: 'Top SF',
+      collection_is_private: false,
+      metadata: { title: 'Top SF' },
+      created_at: '2026-11-24T19:00:00Z',
+    },
+  ]
+
+  const result = await getFeedEvents({
+    limit: 20,
+    queryFn: async (sql) => {
+      if (sql.includes('FROM collection_books')) {
+        return [{ collection_id: '42', book_id: 'b1', title: 'Dune', author: 'Frank Herbert', isbn: '123' }]
+      }
+      return mockRows
+    },
+  })
+
+  assert.equal(result.count, 2)
+  assert.equal(result.events[0].id, '22')
+  assert.equal(result.events[1].id, '15')
+})
+
+test('feed merges shelf_add events per (user_id, book_id) and keeps other users separate', async () => {
+  const capturedWrites = []
+  await recordFeedEvent({
+    userId: 'user2222',
+    eventType: 'shelf_add',
+    bookId: 'gb_dune',
+    metadata: { shelf: 'read' },
+    queryFn: async (sql, values) => {
+      capturedWrites.push({ sql, values })
+      return [{ id: 30, user_id: values[0], event_type: values[1], book_id: values[2] }]
+    },
+  })
+
+  assert.equal(capturedWrites.length, 1)
+  assert.match(capturedWrites[0].sql, /WHERE user_id = \$1/)
+  assert.match(capturedWrites[0].sql, /AND event_type = 'shelf_add'/)
+  assert.match(capturedWrites[0].sql, /AND book_id = \$3/)
+  assert.equal(capturedWrites[0].values[0], 'user2222')
+  assert.equal(capturedWrites[0].values[2], 'gb_dune')
+
+  const mockRows = [
+    {
+      id: '32',
+      user_id: 'user2222',
+      username: 'Vlad',
+      event_type: 'shelf_add',
+      book_id: 'gb_dune',
+      book_title: 'Dune',
+      metadata: { shelf: 'read' },
+      created_at: '2026-11-25T20:50:00Z',
+    },
+    {
+      id: '31',
+      user_id: 'user2222',
+      username: 'Vlad',
+      event_type: 'shelf_add',
+      book_id: 'gb_dune',
+      book_title: 'Dune',
+      metadata: { shelf: 'to-read' },
+      created_at: '2026-11-25T18:00:00Z',
+    },
+    {
+      id: '28',
+      user_id: 'user1111',
+      username: 'Elena',
+      event_type: 'shelf_add',
+      book_id: 'gb_dune',
+      book_title: 'Dune',
+      metadata: { shelf: 'read' },
+      created_at: '2026-11-24T15:00:00Z',
+    },
+  ]
+
+  const result = await getFeedEvents({
+    limit: 20,
+    queryFn: async () => mockRows,
+  })
+
+  assert.equal(result.count, 2)
+  assert.equal(result.events[0].id, '32')
+  assert.equal(result.events[0].metadata.shelf, 'read')
+  assert.equal(result.events[1].id, '28')
+  assert.equal(result.events[1].user.displayName, 'Elena')
+})
+
+
+
 
 
 

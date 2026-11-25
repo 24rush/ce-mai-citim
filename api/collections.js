@@ -278,20 +278,6 @@ export const createCollection = async ({
   )
   const row = rows?.[0]
 
-  if (row?.collection_id) {
-    await recordFeedEvent({
-      userId: cleanUserId,
-      eventType: 'collection_created',
-      collectionId: row.collection_id,
-      metadata: {
-        title: cleanTitle,
-        description: cleanDescription || '',
-        isPrivate: Boolean(row.is_private ?? privateFlag),
-      },
-      queryFn: executeQuery,
-    })
-  }
-
   return {
     success: true,
     collection: {

@@ -38,28 +38,95 @@ export const recordFeedEvent = async ({
 
     const executeQuery = queryFn || (await createDefaultDbQuery())
 
-    const insertSql = `
-      INSERT INTO feed_events (user_id, event_type, book_id, collection_id, metadata, created_at)
-      VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
-      RETURNING id, user_id, event_type, book_id, collection_id, metadata, created_at;
-    `.trim()
+    const cleanCollectionId = collectionId ? Number(collectionId) || null : null
+    const cleanEventType = String(eventType).trim()
+    const cleanBookId = bookId ? String(bookId).trim() : null
+
+    let writeSql
+    if (cleanCollectionId) {
+      writeSql = `
+        WITH updated_existing AS (
+          UPDATE feed_events
+          SET book_id = COALESCE($3, book_id),
+              metadata = COALESCE(feed_events.metadata, '{}'::jsonb) || $5::jsonb,
+              created_at = NOW()
+          WHERE id = (
+            SELECT id
+            FROM feed_events
+            WHERE user_id = $1
+              AND event_type = $2
+              AND collection_id = $4
+              AND (created_at AT TIME ZONE 'UTC')::date = (NOW() AT TIME ZONE 'UTC')::date
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+          )
+          RETURNING id, user_id, event_type, book_id, collection_id, metadata, created_at
+        ),
+        inserted_new AS (
+          INSERT INTO feed_events (user_id, event_type, book_id, collection_id, metadata, created_at)
+          SELECT $1, $2, $3, $4, $5::jsonb, NOW()
+          WHERE NOT EXISTS (SELECT 1 FROM updated_existing)
+          RETURNING id, user_id, event_type, book_id, collection_id, metadata, created_at
+        )
+        SELECT * FROM updated_existing
+        UNION ALL
+        SELECT * FROM inserted_new;
+      `.trim()
+    } else if (cleanEventType === 'shelf_add' && cleanBookId) {
+      writeSql = `
+        WITH existing_rows AS (
+          SELECT id
+          FROM feed_events
+          WHERE user_id = $1
+            AND event_type = 'shelf_add'
+            AND book_id = $3
+          ORDER BY created_at DESC, id DESC
+        ),
+        deleted_duplicates AS (
+          DELETE FROM feed_events
+          WHERE id IN (SELECT id FROM existing_rows OFFSET 1)
+        ),
+        updated_existing AS (
+          UPDATE feed_events
+          SET metadata = $5::jsonb,
+              created_at = NOW()
+          WHERE id = (SELECT id FROM existing_rows LIMIT 1)
+          RETURNING id, user_id, event_type, book_id, collection_id, metadata, created_at
+        ),
+        inserted_new AS (
+          INSERT INTO feed_events (user_id, event_type, book_id, collection_id, metadata, created_at)
+          SELECT $1, $2, $3, $4, $5::jsonb, NOW()
+          WHERE NOT EXISTS (SELECT 1 FROM existing_rows)
+          RETURNING id, user_id, event_type, book_id, collection_id, metadata, created_at
+        )
+        SELECT * FROM updated_existing
+        UNION ALL
+        SELECT * FROM inserted_new;
+      `.trim()
+    } else {
+      writeSql = `
+        INSERT INTO feed_events (user_id, event_type, book_id, collection_id, metadata, created_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
+        RETURNING id, user_id, event_type, book_id, collection_id, metadata, created_at;
+      `.trim()
+    }
 
     const params = [
       cleanUserId,
-      String(eventType).trim(),
-      bookId ? String(bookId).trim() : null,
-      collectionId ? Number(collectionId) || null : null,
+      cleanEventType,
+      cleanBookId,
+      cleanCollectionId,
       JSON.stringify(metadata || {}),
     ]
 
     let rows
     try {
-      rows = await executeQuery(insertSql, params)
+      rows = await executeQuery(writeSql, params)
     } catch (err) {
       const msg = String(err?.message || '')
       if (err?.code === '42P01' || (msg.includes('relation') && msg.includes('does not exist'))) {
         await ensureFeedEventsTable(executeQuery)
-        rows = await executeQuery(insertSql, params)
+        rows = await executeQuery(writeSql, params)
       } else {
         throw err
       }
@@ -146,7 +213,31 @@ export const getFeedEvents = async ({
     }
   }
 
-  const collectionIds = [...new Set((rows || []).map((r) => r.collection_id).filter(Boolean))]
+  const seenCollectionDayKeys = new Set()
+  const seenUserShelfAddKeys = new Set()
+  const dedupedRows = []
+  for (const row of rows || []) {
+    if (row.event_type === 'shelf_add' && row.book_id) {
+      const userBookKey = `${row.user_id}:${row.book_id}`
+      if (seenUserShelfAddKeys.has(userBookKey)) {
+        continue
+      }
+      seenUserShelfAddKeys.add(userBookKey)
+    }
+    if (row.collection_id) {
+      const dayKey = row.created_at
+        ? new Date(row.created_at).toISOString().slice(0, 10)
+        : ''
+      const mergeKey = `${row.user_id}:${row.event_type}:${row.collection_id}:${dayKey}`
+      if (seenCollectionDayKeys.has(mergeKey)) {
+        continue
+      }
+      seenCollectionDayKeys.add(mergeKey)
+    }
+    dedupedRows.push(row)
+  }
+
+  const collectionIds = [...new Set(dedupedRows.map((r) => r.collection_id).filter(Boolean))]
   const booksByCollectionId = {}
   if (collectionIds.length > 0) {
     try {
@@ -182,7 +273,7 @@ export const getFeedEvents = async ({
     }
   }
 
-  const events = (rows || []).map((row) => {
+  const events = dedupedRows.map((row) => {
     let parsedMetadata = {}
     if (row.metadata) {
       if (typeof row.metadata === 'object') {
@@ -220,11 +311,14 @@ export const getFeedEvents = async ({
       publishedYear: b.publishedYear || b.originalPublicationYear || '',
     }))
 
-    const allBooks = eventBook
-      ? [eventBook]
-      : metadataBooks.length > 0
-      ? metadataBooks
-      : eventCollectionBooks
+    const allBooks =
+      row.collection_id && eventCollectionBooks.length > 0
+        ? eventCollectionBooks
+        : eventBook
+        ? [eventBook]
+        : metadataBooks.length > 0
+        ? metadataBooks
+        : eventCollectionBooks
 
     return {
       id: String(row.id),
